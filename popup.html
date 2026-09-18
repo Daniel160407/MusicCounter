@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <header>
+    <h1>Music Counter</h1>
+    <div class="actions">
+      <button id="refresh" title="Refresh the numbers now">Update</button>
+      <button id="reset" title="Erase all recorded time">Reset</button>
+    </div>
+  </header>
+
+  <section class="headline">
+    <div class="big" id="today-value">0m</div>
+    <div class="label">listened today</div>
+  </section>
+
+  <section class="totals">
+    <div class="cell"><span id="week-value">0m</span><em>past 7 days</em></div>
+    <div class="cell"><span id="month-value">0m</span><em>past 30 days</em></div>
+    <div class="cell"><span id="all-value">0m</span><em>all time</em></div>
+  </section>
+
+  <section>
+    <h2>By service</h2>
+    <ul id="sources" class="bars"></ul>
+  </section>
+
+  <section>
+    <h2>Top tracks</h2>
+    <ul id="tracks" class="list"></ul>
+  </section>
+
+  <section>
+    <h2>Favorites</h2>
+    <ul id="favorites" class="list"></ul>
+  </section>
+
+  <section>
+    <h2>Top artists</h2>
+    <ul id="artists" class="list"></ul>
+  </section>
+
+  <footer id="footer"></footer>
+
+  <div id="confirm" class="overlay" hidden>
+    <div class="dialog" role="alertdialog" aria-labelledby="confirm-title" aria-describedby="confirm-body">
+      <h3 id="confirm-title">Erase all data?</h3>
+      <p id="confirm-body">Every recorded second, artist and track will be deleted. Your starred favorites are kept. This cannot be undone.</p>
+      <div class="dialog-actions">
+        <button id="confirm-cancel" class="ghost">Cancel</button>
+        <button id="confirm-erase" class="danger">Erase</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

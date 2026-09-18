@@ -1,0 +1,193 @@
+:root {
+  --bg: #12101a;
+  --panel: #1b1826;
+  --text: #f2eefb;
+  --muted: #9b93b3;
+  --accent: #b191ff;
+  --youtube: #ff4e45;
+  --ytmusic: #ff8a3d;
+  --spotify: #1ed760;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  width: 320px;
+  padding: 14px 16px 12px;
+  background: var(--bg);
+  color: var(--text);
+  font: 13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+
+h1 {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.actions { display: flex; gap: 6px; }
+
+#refresh, #reset {
+  background: none;
+  border: 1px solid #332e45;
+  color: var(--muted);
+  border-radius: 6px;
+  padding: 3px 8px;
+  font-size: 11px;
+  cursor: pointer;
+}
+#refresh:hover, #reset:hover { color: var(--text); border-color: #4a4363; }
+#refresh { color: var(--accent); border-color: #3d3358; }
+#refresh.busy { opacity: .5; }
+
+.headline { text-align: center; margin-bottom: 16px; }
+.big {
+  font-size: 38px;
+  font-weight: 650;
+  letter-spacing: -.02em;
+  color: var(--accent);
+}
+.label { color: var(--muted); font-size: 12px; }
+
+.totals {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+  margin-bottom: 18px;
+}
+.cell {
+  background: var(--panel);
+  border-radius: 8px;
+  padding: 8px 6px;
+  text-align: center;
+}
+.cell span { display: block; font-weight: 600; font-size: 14px; }
+.cell em { display: block; font-style: normal; color: var(--muted); font-size: 10px; margin-top: 2px; }
+
+section + section { margin-top: 16px; }
+
+h2 {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 8px;
+}
+
+ul { list-style: none; }
+
+.bars li { margin-bottom: 8px; }
+.bars .row { display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 3px; }
+.bars .track { height: 5px; background: #272235; border-radius: 3px; overflow: hidden; }
+.bars .fill { height: 100%; border-radius: 3px; }
+.fill.youtube { background: var(--youtube); }
+.fill.ytmusic { background: var(--ytmusic); }
+.fill.spotify { background: var(--spotify); }
+
+.list li {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 4px 0;
+}
+.list li.clickable {
+  cursor: pointer;
+  border-radius: 5px;
+  margin: 0 -6px;
+  padding: 4px 6px;
+}
+.list li.clickable:hover { background: var(--panel); }
+.list li.clickable:hover .name { color: var(--accent); }
+.list .star {
+  flex: 0 0 auto;
+  background: none;
+  border: none;
+  padding: 0 2px;
+  margin-right: -2px;
+  font-size: 13px;
+  line-height: 1;
+  color: #3a3350;
+  cursor: pointer;
+}
+.list .star:hover { color: var(--accent); }
+.list .star.on { color: #ffc861; }
+.list .star:focus-visible { outline: 1px solid var(--accent); border-radius: 3px; }
+
+.list .name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.list .name small { display: block; color: var(--muted); font-size: 11px; }
+.list .meta { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+.list .time { color: var(--muted); white-space: nowrap; }
+.list .plays {
+  background: #2b2540;
+  color: var(--accent);
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+/* A long favourites list scrolls instead of stretching the popup. Rows bleed
+   6px either side (.list li.clickable), so the box pads that back out — without
+   it the bleed reads as horizontal overflow and adds a second scrollbar. */
+#favorites {
+  max-height: 170px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 0 6px;
+  margin: 0 -6px;
+}
+#favorites::-webkit-scrollbar { width: 6px; }
+#favorites::-webkit-scrollbar-thumb { background: #302a44; border-radius: 3px; }
+
+.empty { color: var(--muted); font-size: 12px; }
+
+footer {
+  margin-top: 16px;
+  color: var(--muted);
+  font-size: 11px;
+  text-align: center;
+}
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(8, 6, 14, .72);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 18px;
+}
+.overlay[hidden] { display: none; }
+
+.dialog {
+  background: var(--panel);
+  border: 1px solid #332e45;
+  border-radius: 10px;
+  padding: 16px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, .5);
+}
+.dialog h3 { font-size: 14px; margin-bottom: 6px; }
+.dialog p { color: var(--muted); font-size: 12px; margin-bottom: 14px; }
+
+.dialog-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.dialog-actions button {
+  border-radius: 6px;
+  padding: 6px 12px;
+  font-size: 12px;
+  cursor: pointer;
+  border: 1px solid transparent;
+}
+.ghost { background: none; border-color: #4a4363; color: var(--muted); }
+.ghost:hover { color: var(--text); }
+.danger { background: #d93a4b; color: #fff; font-weight: 600; }
+.danger:hover { background: #e8495a; }
