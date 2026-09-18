@@ -114,6 +114,30 @@
       }
     }
 
+    // The popup asks the page directly instead of trusting the last tick: a
+    // background tab's timers are throttled to roughly once a minute, so the
+    // ticks alone cannot tell "still playing" from "stopped a minute ago".
+    chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+      if (!msg || msg.type !== 'nowPlaying') return false;
+      let state = null;
+      try {
+        state = probe();
+      } catch (err) {
+        state = null;
+      }
+      sendResponse({
+        playing: state
+          ? {
+              source: state.source,
+              title: state.title || '',
+              artist: state.artist || '',
+              id: state.id || '',
+            }
+          : null,
+      });
+      return false;
+    });
+
     setInterval(cycle, CHECK_MS);
     cycle();
   }

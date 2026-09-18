@@ -49,6 +49,77 @@ h1 {
 #refresh { color: var(--accent); border-color: #3d3358; }
 #refresh.busy { opacity: .5; }
 
+/* Now playing: a live row above the totals, gone the moment nothing plays. */
+.now { margin-bottom: 14px; }
+.now[hidden] { display: none; }
+.now-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  background: var(--panel);
+  border-radius: 8px;
+  padding: 8px 10px;
+  cursor: pointer;
+}
+.now-row:hover { background: #221e30; }
+.now-row:hover .name > span { color: var(--accent); }
+.now .name { flex: 1 1 auto; min-width: 0; }
+.now .name > span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+.now .name small {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Three bars bouncing in the service's colour: the one thing on the popup that
+   says "this is happening right now" without any words. */
+.pulse { display: flex; align-items: flex-end; gap: 2px; height: 14px; flex: 0 0 auto; }
+.pulse i {
+  display: block;
+  width: 3px;
+  height: 100%;
+  border-radius: 1px;
+  background: var(--accent);
+  transform-origin: bottom;
+  animation: bounce .9s ease-in-out infinite;
+}
+.pulse i:nth-child(2) { animation-delay: .18s; }
+.pulse i:nth-child(3) { animation-delay: .36s; }
+.pulse.youtube i { background: var(--youtube); }
+.pulse.ytmusic i { background: var(--ytmusic); }
+.pulse.spotify i { background: var(--spotify); }
+
+@keyframes bounce {
+  0%, 100% { transform: scaleY(.35); }
+  50% { transform: scaleY(1); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pulse i { animation: none; transform: scaleY(.6); }
+}
+
+.now .star {
+  flex: 0 0 auto;
+  background: none;
+  border: none;
+  padding: 0 2px;
+  font-size: 14px;
+  line-height: 1;
+  color: #3a3350;
+  cursor: pointer;
+}
+.now .star:hover { color: var(--accent); }
+.now .star.on { color: #ffc861; }
+.now .star:focus-visible { outline: 1px solid var(--accent); border-radius: 3px; }
+
 .headline { text-align: center; margin-bottom: 16px; }
 .big {
   font-size: 38px;
@@ -88,6 +159,16 @@ ul { list-style: none; }
 
 .bars li { margin-bottom: 8px; }
 .bars .row { display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 3px; }
+.bars .count {
+  color: var(--muted);
+  font-size: 11px;
+  margin-right: 6px;
+}
+.bars .share {
+  color: var(--muted);
+  font-size: 11px;
+  margin-left: 6px;
+}
 .bars .track { height: 5px; background: #272235; border-radius: 3px; overflow: hidden; }
 .bars .fill { height: 100%; border-radius: 3px; }
 .fill.youtube { background: var(--youtube); }

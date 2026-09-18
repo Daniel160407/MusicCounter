@@ -77,12 +77,54 @@ function sourceOf(url) {
 // Of the candidate tabs, the one the user would think of as "the YouTube tab":
 // this window before another, the foreground tab before a buried one, and the
 // most recently looked at before the rest.
-function bestTab(tabs, windowId) {
-  return tabs.slice().sort((a, b) => (
+function byRelevance(windowId) {
+  return (a, b) => (
     (a.windowId === windowId ? 0 : 1) - (b.windowId === windowId ? 0 : 1) ||
     (a.active ? 0 : 1) - (b.active ? 0 : 1) ||
     (b.lastAccessed || 0) - (a.lastAccessed || 0)
-  ))[0];
+  );
+}
+
+function bestTab(tabs, windowId) {
+  return tabs.slice().sort(byRelevance(windowId))[0];
+}
+
+const MUSIC_TABS = [
+  ...SERVICE_TABS.spotify,
+  ...SERVICE_TABS.ytmusic,
+  ...SERVICE_TABS.youtube,
+];
+
+// What is playing *right now*, asked of the pages themselves. Every music tab
+// answers from a fresh look at its own player, so a paused or closed tab simply
+// stops answering and the row disappears at once.
+async function queryNowPlaying() {
+  let tabs = [];
+  try {
+    tabs = await chrome.tabs.query({ url: MUSIC_TABS });
+  } catch (err) {
+    return null;
+  }
+  if (tabs.length === 0) return null;
+
+  const [active] = await chrome.tabs.query({ active: true, currentWindow: true });
+  const ordered = tabs.slice().sort(byRelevance(active ? active.windowId : chrome.windows.WINDOW_ID_NONE));
+
+  const replies = await Promise.all(ordered.map(async (tab) => {
+    try {
+      const reply = await chrome.tabs.sendMessage(tab.id, { type: 'nowPlaying' });
+      // Remember which tab answered: clicking the row should go to the tab the
+      // sound is coming from, not open the song somewhere else.
+      return reply && reply.playing ? { ...reply.playing, tabId: tab.id } : null;
+    } catch (err) {
+      // No content script in that tab (injected before the last reload, or the
+      // tab is still loading); nothing to report.
+      return null;
+    }
+  }));
+
+  // Two tabs can play at once; show the one the user would call theirs.
+  return replies.find(Boolean) || null;
 }
 
 // Cmd/Ctrl-click and middle-click mean "new tab" everywhere else in the
@@ -135,12 +177,22 @@ function renderSources(stats) {
     return;
   }
 
+  // Plays are recorded per track, so the per-service figure is their sum. Only
+  // tracks that were listened at least halfway ever counted a play.
+  const plays = {};
+  for (const track of Object.values(stats.tracks || {})) {
+    plays[track.source] = (plays[track.source] || 0) + (track.plays || 0);
+  }
+
   const max = entries[0][1];
+  // The share is of listening time across the services, so the figures add up
+  // to 100% however many of them you use.
+  const total = entries.reduce((sum, [, seconds]) => sum + seconds, 0);
   list.innerHTML = entries.map(([source, seconds]) => `
     <li>
       <div class="row">
-        <span>${SOURCE_NAMES[source] || source}</span>
-        <span>${formatDuration(seconds)}</span>
+        <span>${SOURCE_NAMES[source] || source}<span class="share">${Math.round((seconds / total) * 100)}%</span></span>
+        <span>${plays[source] ? `<span class="count">${plays[source]} ${plays[source] === 1 ? 'song' : 'songs'}</span>` : ''}${formatDuration(seconds)}</span>
       </div>
       <div class="track"><div class="fill ${source}" style="width:${(seconds / max) * 100}%"></div></div>
     </li>
@@ -223,6 +275,43 @@ function trackRow(track, favorites) {
   };
 }
 
+// The track the "now playing" row currently stands for, so its click handlers —
+// attached once, not on every poll — always act on what is on screen.
+let current = null;
+
+function renderNowPlaying(stats) {
+  const section = document.getElementById('now');
+  const playing = stats.nowPlaying || null;
+
+  if (!playing) {
+    current = null;
+    section.hidden = true;
+    return;
+  }
+
+  // Keys are built exactly as the worker builds them, so the star here and the
+  // star in the lists below toggle the same record.
+  const key = `${playing.source}:${playing.id || playing.title}`;
+  const favorite = Boolean((stats.favorites || {})[key]);
+  current = { ...playing, key, favorite };
+
+  document.getElementById('now-title').textContent = playing.title;
+  const artist = document.getElementById('now-artist');
+  artist.textContent = playing.artist || '';
+  // A plain `hidden` would lose to the stylesheet's display:block.
+  artist.style.display = playing.artist ? '' : 'none';
+
+  document.getElementById('now-pulse').className = `pulse ${playing.source}`;
+  document.getElementById('now-row').title = `Go to the ${SOURCE_NAMES[playing.source] || playing.source} tab playing this`;
+
+  const star = document.getElementById('now-star');
+  star.classList.toggle('on', favorite);
+  star.setAttribute('aria-pressed', favorite ? 'true' : 'false');
+  star.title = favorite ? 'Remove from favorites' : 'Add to favorites';
+
+  section.hidden = false;
+}
+
 function render(stats) {
   const days = stats.days || {};
   const favorites = stats.favorites || {};
@@ -231,6 +320,7 @@ function render(stats) {
   document.getElementById('month-value').textContent = formatDuration(sumLastDays(days, 30));
   document.getElementById('all-value').textContent = formatDuration(stats.total || 0);
 
+  renderNowPlaying(stats);
   renderSources(stats);
 
   const artists = Object.entries(stats.artists || {})
@@ -285,9 +375,54 @@ function render(stats) {
 }
 
 async function load() {
-  const stats = await chrome.runtime.sendMessage({ type: 'getStats' });
-  render(stats || {});
+  const [stats, playing] = await Promise.all([
+    chrome.runtime.sendMessage({ type: 'getStats' }),
+    queryNowPlaying(),
+  ]);
+  render({ ...(stats || {}), nowPlaying: playing });
 }
+
+const nowRow = document.getElementById('now-row');
+
+// Go to the tab that is actually playing. Navigating it to the track's URL —
+// what the list rows do — would restart the very song you are listening to.
+async function focusPlayingTab() {
+  try {
+    const tab = await chrome.tabs.get(current.tabId);
+    await chrome.tabs.update(tab.id, { active: true });
+    await chrome.windows.update(tab.windowId, { focused: true });
+    window.close();
+    return true;
+  } catch (err) {
+    // The tab closed between the poll and the click.
+    return false;
+  }
+}
+
+const openCurrent = async (event) => {
+  if (!current || event.target.closest('button.star')) return;
+  // A modifier still means "open it separately", as everywhere else.
+  if (wantsNewTab(event) || !current.tabId) {
+    openUrl(trackUrl(current), event);
+    return;
+  }
+  if (!await focusPlayingTab()) openUrl(trackUrl(current), event);
+};
+nowRow.addEventListener('click', openCurrent);
+nowRow.addEventListener('auxclick', (event) => {
+  if (event.button === 1) openCurrent(event);
+});
+
+document.getElementById('now-star').addEventListener('click', async (event) => {
+  event.stopPropagation();
+  if (!current) return;
+  await chrome.runtime.sendMessage({
+    type: 'toggleFavorite',
+    key: current.key,
+    track: { id: current.id, title: current.title, artist: current.artist, source: current.source },
+  });
+  load();
+});
 
 const refreshButton = document.getElementById('refresh');
 
