@@ -5,10 +5,24 @@ YouTube, YouTube Music and the Spotify web player.
 
 ## Install
 
-1. Open `chrome://extensions`
-2. Turn on **Developer mode** (top right)
-3. Click **Load unpacked** and pick this folder
-4. Pin the extension and click the icon to see your stats
+1. Clone the repository:
+   ```
+   git clone https://github.com/Daniel160407/MusicCounter.git
+   ```
+2. Open `chrome://extensions`
+3. Turn on **Developer mode** (top right)
+4. Click **Load unpacked** and pick the `MusicCounter` folder
+5. Pin the extension and click the icon to see your stats
+
+## Updating
+
+1. Pull the latest changes:
+   ```
+   cd MusicCounter
+   git pull
+   ```
+2. Open `chrome://extensions` and click the **reload icon** on the Music Counter card
+   (no need to remove and re-add the extension)
 
 ## What counts
 
