@@ -69,6 +69,16 @@
     return undefined;
   }
 
+  // The cover art shown by the now-playing widget. Spotify has no public,
+  // id-derived image URL the way YouTube does, so the only way to get one
+  // without OAuth is to read the <img> the player itself already rendered.
+  function artworkUrl() {
+    let img = document.querySelector('[data-testid="cover-art-image"]');
+    if (img && img.tagName !== 'IMG') img = img.querySelector('img');
+    if (!img) img = document.querySelector('[data-testid="now-playing-widget"] img');
+    return img ? (img.currentSrc || img.src || '') : '';
+  }
+
   function isMuted() {
     const media = document.querySelector('video, audio');
     if (media && (media.muted || media.volume === 0)) return true;
@@ -81,6 +91,42 @@
     // Works in English and most Latin languages; the progress signature covers
     // everything else, one tick later.
     return /paus/i.test(label);
+  }
+
+  // The now-playing widget without the movement test: the popup's row has to
+  // stay put while the track is paused, which is exactly when the progress
+  // signature stops changing.
+  function snapshot() {
+    const ref = trackRef();
+    if (ref.kind === 'episode') return null;
+    if (!ref.id && !ref.title) return null;
+
+    return {
+      source: 'spotify',
+      duration: trackDuration(),
+      id: ref.id || ref.title,
+      title: ref.title,
+      artist: artist(),
+      artwork: artworkUrl(),
+      // The play/pause label is the only synchronous read of the state. It is
+      // matched loosely, so a player in another language may show the wrong
+      // icon until the button is used; pressing it still does the right thing,
+      // because Spotify's own button is what gets clicked.
+      paused: !buttonSaysPause(),
+    };
+  }
+
+  const BUTTONS = {
+    prev: '[data-testid="control-button-skip-back"]',
+    playPause: '[data-testid="control-button-playpause"]',
+    next: '[data-testid="control-button-skip-forward"]',
+  };
+
+  function control(action) {
+    const button = document.querySelector(BUTTONS[action] || '');
+    if (!button || button.disabled) return false;
+    button.click();
+    return true;
   }
 
   MC.startTracker(() => {
@@ -111,6 +157,7 @@
       id: ref.id || ref.title,
       title: ref.title,
       artist: artist(),
+      artwork: artworkUrl(),
     };
-  });
+  }, { snapshot, control });
 })();

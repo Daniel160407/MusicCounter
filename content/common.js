@@ -13,6 +13,9 @@
   // A play is only credited once half the track has actually been listened to,
   // so skipping through songs no longer inflates the play counts.
   const PLAY_FRACTION = 0.5;
+  // History gets an entry earlier, once a smaller fraction has been heard, so
+  // a song you didn't finish still shows up in "recently played".
+  const HISTORY_FRACTION = 0.2;
   // Tracks whose length we cannot read — live streams, an older Spotify layout —
   // fall back to a flat minute of listening.
   const UNKNOWN_DURATION_MS = 60000;
@@ -36,11 +39,27 @@
     return root.querySelector('video, audio') !== null;
   }
 
+  // The element the player is using, playing or paused. findPlayingMedia is the
+  // one the counters ask about — this one is for the transport buttons and the
+  // now-playing row, which have to keep working while the music is stopped.
+  function findMedia(root = document) {
+    let best = null;
+    for (const el of root.querySelectorAll('video, audio')) {
+      if (mediaIsAudiblyPlaying(el)) return el;
+      if (!best && el.readyState >= 2 && !el.muted) best = el;
+    }
+    return best;
+  }
+
   function text(node) {
     return node ? node.textContent.trim() : '';
   }
 
-  function startTracker(probe) {
+  // `hooks` are optional per-site extras:
+  //   snapshot() — what the player holds right now, paused included, for the
+  //                popup's now-playing row; probe() is used when absent.
+  //   control(action) — 'prev' | 'playPause' | 'next' on the page's own player.
+  function startTracker(probe, hooks = {}) {
     let lastActiveAt = null;
     let lastKey = null;
     let lastPosition = null;
@@ -49,6 +68,7 @@
     // picks up where you left off.
     let listenedMs = 0;
     let playCounted = false;
+    let historyLogged = false;
 
     function cycle() {
       let now;
@@ -72,6 +92,7 @@
         if (restarted) {
           listenedMs = 0;
           playCounted = false;
+          historyLogged = false;
         }
         lastKey = key;
         lastPosition = position;
@@ -90,12 +111,15 @@
         listenedMs += elapsed;
 
         const duration = Number(state.duration);
-        const needed = Number.isFinite(duration) && duration > 0
-          ? duration * 1000 * PLAY_FRACTION
-          : UNKNOWN_DURATION_MS;
+        const hasDuration = Number.isFinite(duration) && duration > 0;
+        const needed = hasDuration ? duration * 1000 * PLAY_FRACTION : UNKNOWN_DURATION_MS;
+        const historyNeeded = hasDuration ? duration * 1000 * HISTORY_FRACTION : UNKNOWN_DURATION_MS;
 
         const startedNewPlay = !playCounted && listenedMs >= needed;
         if (startedNewPlay) playCounted = true;
+
+        const startedNewHistoryEntry = !historyLogged && listenedMs >= historyNeeded;
+        if (startedNewHistoryEntry) historyLogged = true;
 
         chrome.runtime.sendMessage({
           type: 'tick',
@@ -103,9 +127,11 @@
           title: state.title || '',
           artist: state.artist || '',
           id: state.id || '',
+          artwork: state.artwork || '',
           from: now - elapsed,
           to: now,
           newPlay: startedNewPlay,
+          newHistoryEntry: startedNewHistoryEntry,
         }).catch(() => {
           // Worker asleep or extension reloading; the next tick will land.
         });
@@ -118,23 +144,43 @@
     // background tab's timers are throttled to roughly once a minute, so the
     // ticks alone cannot tell "still playing" from "stopped a minute ago".
     chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-      if (!msg || msg.type !== 'nowPlaying') return false;
-      let state = null;
-      try {
-        state = probe();
-      } catch (err) {
-        state = null;
+      if (!msg) return false;
+
+      if (msg.type === 'nowPlaying') {
+        let state = null;
+        try {
+          // A paused track still has to be reported, or the popup's play button
+          // would vanish along with the row the moment you used it.
+          state = hooks.snapshot ? hooks.snapshot() : probe();
+        } catch (err) {
+          state = null;
+        }
+        sendResponse({
+          playing: state
+            ? {
+                source: state.source,
+                title: state.title || '',
+                artist: state.artist || '',
+                id: state.id || '',
+                paused: Boolean(state.paused),
+                canControl: Boolean(hooks.control),
+              }
+            : null,
+        });
+        return false;
       }
-      sendResponse({
-        playing: state
-          ? {
-              source: state.source,
-              title: state.title || '',
-              artist: state.artist || '',
-              id: state.id || '',
-            }
-          : null,
-      });
+
+      if (msg.type === 'control') {
+        let ok = false;
+        try {
+          ok = hooks.control ? hooks.control(msg.action) !== false : false;
+        } catch (err) {
+          ok = false;
+        }
+        sendResponse({ ok });
+        return false;
+      }
+
       return false;
     });
 
@@ -145,6 +191,7 @@
   window.__musicCounter = {
     mediaIsAudiblyPlaying,
     findPlayingMedia,
+    findMedia,
     anyMediaPresent,
     text,
     startTracker,

@@ -3,7 +3,7 @@
   "name": "Music Counter",
   "version": "1.0.0",
   "description": "Counts how much time you actually spend listening to music on YouTube, YouTube Music and the Spotify web player.",
-  "permissions": ["storage"],
+  "permissions": ["storage", "downloads"],
   "host_permissions": [
     "https://www.youtube.com/*",
     "https://m.youtube.com/*",

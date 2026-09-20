@@ -68,14 +68,10 @@
     ) || document.title.replace(/ - YouTube$/, '');
   }
 
-  MC.startTracker(() => {
+  function current(media) {
     const id = videoIdFromUrl();
     if (!id) return null;
-
-    // Ignore muted previews and the inline miniplayer's silent autoplay.
-    const media = MC.findPlayingMedia();
     if (!media) return null;
-
     if (!isMusicVideo(id)) return null;
 
     return {
@@ -86,6 +82,34 @@
       id,
       title: currentTitle(),
       artist: channelName().replace(/ - Topic$/, ''),
+      paused: media.paused,
     };
-  });
+  }
+
+  // Play and pause go straight to the media element — the one thing on a watch
+  // page that is always there. Previous and next are the player's own chrome
+  // buttons, which know about the playlist or mix you are inside; off a
+  // playlist YouTube disables them and the click harmlessly does nothing.
+  function control(action) {
+    const media = MC.findMedia();
+    if (action === 'playPause') {
+      if (!media) return false;
+      if (media.paused) media.play().catch(() => {});
+      else media.pause();
+      return true;
+    }
+
+    const button = document.querySelector(
+      action === 'prev' ? '.ytp-prev-button' : '.ytp-next-button'
+    );
+    if (!button || button.getAttribute('aria-disabled') === 'true') return false;
+    button.click();
+    return true;
+  }
+
+  MC.startTracker(
+    // Ignore muted previews and the inline miniplayer's silent autoplay.
+    () => current(MC.findPlayingMedia()),
+    { snapshot: () => current(MC.findMedia()), control },
+  );
 })();

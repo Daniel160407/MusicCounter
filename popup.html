@@ -8,7 +8,8 @@
   <header>
     <h1>Music Counter</h1>
     <div class="actions">
-      <button id="refresh" title="Refresh the numbers now">Update</button>
+      <button id="share" title="Share your listening as an image">Share</button>
+      <button id="refresh" title="Refresh the numbers now">Refresh</button>
       <button id="reset" title="Erase all recorded time">Reset</button>
     </div>
   </header>
@@ -17,10 +18,29 @@
     <div id="now-row" class="now-row">
       <span class="pulse" id="now-pulse"><i></i><i></i><i></i></span>
       <span class="name"><span id="now-title"></span><small id="now-artist"></small></span>
+      <span id="now-transport" class="transport" hidden>
+        <button id="now-prev" class="tbtn" title="Previous track" aria-label="Previous track">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 3h2v10H4zm10 0v10L6.5 8z"/></svg>
+        </button>
+        <button id="now-playpause" class="tbtn" title="Pause" aria-label="Pause">
+          <svg class="icon-play" viewBox="0 0 16 16" aria-hidden="true"><path d="M4.5 3l8 5-8 5z"/></svg>
+          <svg class="icon-pause" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 3h3v10H4zm5 0h3v10H9z"/></svg>
+        </button>
+        <button id="now-next" class="tbtn" title="Next track" aria-label="Next track">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M10 3h2v10h-2zM2 3l7.5 5L2 13z"/></svg>
+        </button>
+      </span>
       <button id="now-star" class="star" aria-pressed="false" title="Add to favorites">★</button>
     </div>
   </section>
 
+  <nav class="tabs" role="tablist">
+    <button id="tab-overview" class="tab on" role="tab" aria-selected="true" aria-controls="panel-overview">Overview</button>
+    <button id="tab-analytics" class="tab" role="tab" aria-selected="false" aria-controls="panel-analytics">Analytics</button>
+    <button id="tab-history" class="tab" role="tab" aria-selected="false" aria-controls="panel-history">History</button>
+  </nav>
+
+  <div id="panel-overview" class="panel" role="tabpanel" aria-labelledby="tab-overview">
   <section class="headline">
     <div class="big" id="today-value">0m</div>
     <div class="label">listened today</div>
@@ -51,16 +71,107 @@
     <h2>Top artists</h2>
     <ul id="artists" class="list"></ul>
   </section>
+  </div>
+
+  <div id="panel-analytics" class="panel" role="tabpanel" aria-labelledby="tab-analytics" hidden>
+    <section>
+      <div class="chart-head">
+        <h2>Days you listened</h2>
+        <div class="range" role="group" aria-label="Range">
+          <button class="range-option on" data-days="7" title="This week, Monday to Sunday" aria-pressed="true">Week</button>
+          <button class="range-option" data-days="14">14d</button>
+          <button class="range-option" data-days="30">30d</button>
+        </div>
+      </div>
+      <div id="chart-days" class="chart"></div>
+      <p id="days-note" class="chart-note"></p>
+    </section>
+
+    <section>
+      <div class="chart-head">
+        <h2>Hours of the day</h2>
+        <div class="day-nav" role="group" aria-label="Day">
+          <button id="hours-prev-day" class="day-nav-btn" aria-label="Previous day">‹</button>
+          <span id="hours-day-label" class="day-nav-label">Today</span>
+          <button id="hours-next-day" class="day-nav-btn" aria-label="Next day" disabled>›</button>
+        </div>
+      </div>
+      <div id="chart-hours" class="chart"></div>
+      <p id="hours-note" class="chart-note"></p>
+    </section>
+
+    <section class="legend" id="chart-legend"></section>
+  </div>
+
+  <div id="panel-history" class="panel" role="tabpanel" aria-labelledby="tab-history" hidden>
+    <section class="history-settings">
+      <label for="history-retention">Keep history for</label>
+      <select id="history-retention">
+        <option value="week">1 week</option>
+        <option value="2weeks">2 weeks</option>
+        <option value="month">1 month</option>
+        <option value="forever">Forever</option>
+      </select>
+    </section>
+
+    <section>
+      <div class="chart-head">
+        <h2>All plays</h2>
+        <div class="day-nav" role="group" aria-label="Day">
+          <button id="history-prev-day" class="day-nav-btn" aria-label="Previous day">‹</button>
+          <span id="history-day-label" class="day-nav-label">Today</span>
+          <button id="history-next-day" class="day-nav-btn" aria-label="Next day" disabled>›</button>
+        </div>
+      </div>
+      <ul id="history" class="list history-list"></ul>
+      <p id="history-note" class="chart-note"></p>
+    </section>
+  </div>
 
   <footer id="footer"></footer>
 
   <div id="confirm" class="overlay" hidden>
     <div class="dialog" role="alertdialog" aria-labelledby="confirm-title" aria-describedby="confirm-body">
       <h3 id="confirm-title">Erase all data?</h3>
-      <p id="confirm-body">Every recorded second, artist and track will be deleted. Your starred favorites are kept. This cannot be undone.</p>
+      <p id="confirm-body">Every recorded second, artist, track and play in your history will be deleted. Your starred favorites are kept. This cannot be undone.</p>
       <div class="dialog-actions">
         <button id="confirm-cancel" class="ghost">Cancel</button>
         <button id="confirm-erase" class="danger">Erase</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="share-overlay" class="overlay" hidden>
+    <div class="dialog share-dialog" role="dialog" aria-labelledby="share-title" aria-modal="true">
+      <h3 id="share-title">Share your listening</h3>
+
+      <div class="range share-range" role="group" aria-label="Period">
+        <button class="share-period" data-period="day">Day</button>
+        <button class="share-period on" data-period="week" aria-pressed="true">Week</button>
+        <button class="share-period" data-period="month">Month</button>
+        <button class="share-period" data-period="year">Year</button>
+      </div>
+
+      <div class="share-preview">
+        <canvas id="share-canvas" width="1080" height="1350" aria-label="Share card preview"></canvas>
+      </div>
+
+      <p id="share-caption" class="share-caption"></p>
+
+      <div class="share-targets">
+        <button id="share-instagram" class="target instagram" title="Save the card and open Instagram">Instagram</button>
+        <button id="share-facebook" class="target facebook" title="Save the card and open Facebook">Facebook</button>
+      </div>
+
+      <div class="share-extra">
+        <button id="share-save" class="ghost">Save image</button>
+        <button id="share-copy" class="ghost">Copy image</button>
+      </div>
+
+      <p id="share-status" class="share-status">Neither network lets an extension post for you: the card is saved and the site opened, so you can drop it in.</p>
+
+      <div class="dialog-actions">
+        <button id="share-close" class="ghost">Close</button>
       </div>
     </div>
   </div>

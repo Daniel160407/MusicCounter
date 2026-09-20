@@ -3,7 +3,8 @@
 function emptyStats() {
   return {
     total: 0,
-    days: {},        // "YYYY-MM-DD" -> { total, youtube, ytmusic, spotify }
+    days: {},        // "YYYY-MM-DD" -> { total, youtube, ytmusic, spotify, hours }
+                     // hours: 0-23 (local) -> { total, youtube, ytmusic, spotify }
     sources: {},     // source -> seconds
       artists: {},     // artist -> { seconds, source }
     tracks: {},      // key -> { id, title, artist, source, seconds, plays }
@@ -18,6 +19,18 @@ const MAX_ARTISTS = 800;
 const MAX_TRACKS = 1500;
 const MAX_FAVORITES = 300;
 
+// History is one entry per counted play (see `newPlay` below), oldest first.
+// MAX_HISTORY is a hard safety cap independent of the retention setting, so
+// "Forever" can't grow the stored record without bound.
+const MAX_HISTORY = 5000;
+const RETENTION_MS = {
+  week: 7 * 24 * 60 * 60 * 1000,
+  '2weeks': 14 * 24 * 60 * 60 * 1000,
+  month: 30 * 24 * 60 * 60 * 1000,
+  forever: 0,
+};
+const DEFAULT_SETTINGS = { historyRetention: 'forever' };
+
 // Serialise read-modify-write so concurrent ticks can't clobber each other.
 let queue = Promise.resolve();
 
@@ -30,6 +43,12 @@ function dayKey(ts) {
 function startOfNextDay(ts) {
   const d = new Date(ts);
   d.setHours(24, 0, 0, 0);
+  return d.getTime();
+}
+
+function startOfNextHour(ts) {
+  const d = new Date(ts);
+  d.setMinutes(60, 0, 0);
   return d.getTime();
 }
 
@@ -65,6 +84,38 @@ function prune(map, limit, valueOf, keep) {
 async function loadFavorites() {
   const stored = await chrome.storage.local.get('favorites');
   return stored.favorites || {};
+}
+
+async function loadSettings() {
+  const stored = await chrome.storage.local.get('settings');
+  return Object.assign({}, DEFAULT_SETTINGS, stored.settings || {});
+}
+
+async function loadHistory() {
+  const stored = await chrome.storage.local.get('history');
+  return stored.history || [];
+}
+
+function pruneHistory(history, retention) {
+  let next = history;
+  const ms = RETENTION_MS[retention];
+  if (ms) {
+    const cutoff = Date.now() - ms;
+    next = next.filter((entry) => entry.at >= cutoff);
+  }
+  if (next.length > MAX_HISTORY) next = next.slice(next.length - MAX_HISTORY);
+  return next;
+}
+
+async function setHistoryRetention(msg) {
+  const retention = Object.prototype.hasOwnProperty.call(RETENTION_MS, msg.retention)
+    ? msg.retention
+    : 'forever';
+  const settings = await loadSettings();
+  settings.historyRetention = retention;
+  const history = pruneHistory(await loadHistory(), retention);
+  await chrome.storage.local.set({ settings, history });
+  return { settings, history };
 }
 
 async function toggleFavorite(msg) {
@@ -108,9 +159,25 @@ function addToDays(stats, source, from, to) {
   let cursor = from;
   while (cursor < to) {
     const boundary = Math.min(startOfNextDay(cursor), to);
-    const seconds = (boundary - cursor) / 1000;
     const key = dayKey(cursor);
-    const day = stats.days[key] || { total: 0, youtube: 0, ytmusic: 0, spotify: 0 };
+    const day = stats.days[key] || { total: 0, youtube: 0, ytmusic: 0, spotify: 0, hours: {} };
+    if (!day.hours) day.hours = {};
+
+    // Further split this day's slice by hour, so the popup can show what a
+    // single day looked like rather than only the all-time hourly shape.
+    let hourCursor = cursor;
+    while (hourCursor < boundary) {
+      const hourBoundary = Math.min(startOfNextHour(hourCursor), boundary);
+      const hourSeconds = (hourBoundary - hourCursor) / 1000;
+      const hourKey = String(new Date(hourCursor).getHours());
+      const hourEntry = day.hours[hourKey] || { total: 0, youtube: 0, ytmusic: 0, spotify: 0 };
+      hourEntry.total += hourSeconds;
+      hourEntry[source] = (hourEntry[source] || 0) + hourSeconds;
+      day.hours[hourKey] = hourEntry;
+      hourCursor = hourBoundary;
+    }
+
+    const seconds = (boundary - cursor) / 1000;
     day.total += seconds;
     day[source] = (day[source] || 0) + seconds;
     stats.days[key] = day;
@@ -161,6 +228,16 @@ async function recordTick(msg) {
   stats.tracks = prune(stats.tracks, MAX_TRACKS, (v) => v.seconds, await loadFavorites());
 
   await chrome.storage.local.set({ stats });
+
+  // One row per counted play, not per tick, so scrubbing through a song
+  // doesn't spam the history with duplicates.
+  if (msg.newHistoryEntry && title) {
+    const settings = await loadSettings();
+    let history = await loadHistory();
+    history.push({ id: msg.id || '', title, artist, source, artwork: (msg.artwork || '').trim(), at: to });
+    history = pruneHistory(history, settings.historyRetention);
+    await chrome.storage.local.set({ history });
+  }
 }
 
 
@@ -240,7 +317,12 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 
   if (msg && msg.type === 'getStats') {
     queue = queue
-      .then(async () => ({ ...(await loadStats()), favorites: await loadFavorites() }))
+      .then(async () => ({
+        ...(await loadStats()),
+        favorites: await loadFavorites(),
+        history: await loadHistory(),
+        settings: await loadSettings(),
+      }))
       .then((stats) => sendResponse(stats))
       .catch(() => sendResponse(emptyStats()));
     return true;
@@ -254,9 +336,17 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     return true;
   }
 
+  if (msg && msg.type === 'setHistoryRetention') {
+    queue = queue
+      .then(() => setHistoryRetention(msg))
+      .then((result) => sendResponse(result))
+      .catch(() => sendResponse({ settings: DEFAULT_SETTINGS, history: [] }));
+    return true;
+  }
+
   if (msg && msg.type === 'reset') {
     queue = queue
-      .then(() => chrome.storage.local.set({ stats: emptyStats() }))
+      .then(() => chrome.storage.local.set({ stats: emptyStats(), history: [] }))
       .then(() => sendResponse({ ok: true }))
       .catch(() => sendResponse({ ok: false }));
     return true;
