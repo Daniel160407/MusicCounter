@@ -40,7 +40,13 @@
     next: 'ytmusic-player-bar .next-button',
   };
 
-  function control(action) {
+  function control(action, value) {
+    if (action === 'seek') {
+      const media = MC.findMedia();
+      if (!media || !Number.isFinite(media.duration)) return false;
+      media.currentTime = Math.max(0, Math.min(media.duration, value));
+      return true;
+    }
     const button = document.querySelector(BUTTONS[action] || '');
     if (!button) return false;
     button.click();

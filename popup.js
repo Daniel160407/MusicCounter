@@ -206,8 +206,11 @@ function renderSources(stats) {
     .filter(([, v]) => v > 0)
     .sort((a, b) => b[1] - a[1]);
 
+  const perPercent = document.getElementById('per-percent');
+
   if (entries.length === 0) {
     list.innerHTML = '<li class="empty">Nothing recorded yet.</li>';
+    perPercent.textContent = '';
     return;
   }
 
@@ -222,6 +225,7 @@ function renderSources(stats) {
   // The share is of listening time across the services, so the figures add up
   // to 100% however many of them you use.
   const total = entries.reduce((sum, [, seconds]) => sum + seconds, 0);
+  perPercent.textContent = `1% = ${formatMinutes(total / 100)}`;
   list.innerHTML = entries.map(([source, seconds]) => `
     <li>
       <div class="row">
@@ -231,6 +235,15 @@ function renderSources(stats) {
       <div class="track"><div class="fill ${source}" style="width:${(seconds / max) * 100}%"></div></div>
     </li>
   `).join('');
+}
+
+// A percentage point of the shares above, in the minutes it stands for. Small
+// spans read better in seconds than as a fraction of a minute, and a round
+// figure keeps the trailing ".0" off the common case.
+function formatMinutes(seconds) {
+  if (seconds < 60) return `${Math.round(seconds)}s`;
+  const minutes = seconds / 60;
+  return `${minutes < 10 ? minutes.toFixed(1).replace(/\.0$/, '') : Math.round(minutes)}m`;
 }
 
 // Adds a one-shot animation class and lets it clean itself up, rather than
@@ -311,23 +324,39 @@ const MAX_HISTORY_ROWS = 500;
 // the-poll reasoning as dayRange/hoursDayOffset above.
 let historyDayOffset = 0;
 
+// Live search query for "All plays". Non-empty search looks across every
+// recorded day instead of the currently selected one.
+let historySearchQuery = '';
+
 function renderHistory(history) {
   const list = document.getElementById('history');
   const note = document.getElementById('history-note');
   const all = (history || []).slice().sort((a, b) => b.at - a.at);
 
-  const day = dayForOffset(historyDayOffset);
-  const key = dayKey(day);
-  const entries = all.filter((entry) => dayKey(new Date(entry.at)) === key);
+  const query = historySearchQuery.trim().toLowerCase();
+  const searching = query.length > 0;
 
+  const day = dayForOffset(historyDayOffset);
   document.getElementById('history-day-label').textContent = dayNavLabel(day);
   const oldest = all.length ? new Date(all[all.length - 1].at) : null;
   if (oldest) oldest.setHours(0, 0, 0, 0);
-  document.getElementById('history-prev-day').disabled = !oldest || day <= oldest;
-  document.getElementById('history-next-day').disabled = historyDayOffset <= 0;
+  document.getElementById('history-prev-day').disabled = searching || !oldest || day <= oldest;
+  document.getElementById('history-next-day').disabled = searching || historyDayOffset <= 0;
+
+  const matches = (entry) => {
+    if (!searching) return true;
+    const title = (entry.title || '').toLowerCase();
+    const artist = (entry.artist || '').toLowerCase();
+    return title.includes(query) || artist.includes(query);
+  };
+
+  const key = dayKey(day);
+  const entries = searching
+    ? all.filter(matches)
+    : all.filter((entry) => dayKey(new Date(entry.at)) === key);
 
   if (entries.length === 0) {
-    list.innerHTML = '<li class="empty">Nothing played that day.</li>';
+    list.innerHTML = `<li class="empty">${searching ? 'No plays match your search.' : 'Nothing played that day.'}</li>`;
     note.textContent = '';
     return;
   }
@@ -372,9 +401,10 @@ function renderHistory(history) {
     });
   });
 
+  const scope = searching ? 'matching plays' : 'plays that day';
   note.textContent = entries.length > shown.length
-    ? `Showing the most recent ${shown.length} of ${entries.length} plays that day.`
-    : `${entries.length} play${entries.length === 1 ? '' : 's'} recorded that day.`;
+    ? `Showing the most recent ${shown.length} of ${entries.length} ${scope}.`
+    : `${entries.length} ${entries.length === 1 ? 'play' : 'plays'}${searching ? ' match your search.' : ' recorded that day.'}`;
 }
 
 const historyRetentionSelect = document.getElementById('history-retention');
@@ -391,6 +421,21 @@ document.getElementById('history-next-day').addEventListener('click', () => {
   if (historyDayOffset <= 0) return;
   historyDayOffset -= 1;
   load();
+});
+
+const historySearchInput = document.getElementById('history-search');
+const historySearchClear = document.getElementById('history-search-clear');
+historySearchInput.addEventListener('input', () => {
+  historySearchQuery = historySearchInput.value;
+  historySearchClear.hidden = historySearchQuery.length === 0;
+  if (latest) renderHistory(latest.history);
+});
+historySearchClear.addEventListener('click', () => {
+  historySearchInput.value = '';
+  historySearchQuery = '';
+  historySearchClear.hidden = true;
+  historySearchInput.focus();
+  if (latest) renderHistory(latest.history);
 });
 
 // One row of the two track lists, carrying what the star needs to toggle it.
@@ -418,6 +463,7 @@ function renderNowPlaying(stats) {
 
   if (!playing) {
     current = null;
+    progress = null;
     section.hidden = true;
     return;
   }
@@ -445,6 +491,9 @@ function renderNowPlaying(stats) {
   const transport = document.getElementById('now-transport');
   transport.hidden = !(playing.canControl && playing.tabId);
   setPlayPause(!paused);
+  document.getElementById('now-seek').className = `seek ${playing.source}`;
+
+  syncProgress(playing);
 
   const star = document.getElementById('now-star');
   star.classList.toggle('on', favorite);
@@ -675,6 +724,21 @@ function renderAnalytics(stats) {
     .join('');
 }
 
+// Top tracks can be read by time listened or by how often a track came round.
+let trackSort = 'seconds';
+
+document.querySelectorAll('.sort-option').forEach((button) => {
+  button.addEventListener('click', () => {
+    trackSort = button.dataset.sort;
+    document.querySelectorAll('.sort-option').forEach((other) => {
+      const on = other === button;
+      other.classList.toggle('on', on);
+      other.setAttribute('aria-pressed', on ? 'true' : 'false');
+    });
+    if (latest) render(latest);
+  });
+});
+
 document.querySelectorAll('.range-option').forEach((button) => {
   button.addEventListener('click', () => {
     dayRange = Number(button.dataset.days);
@@ -772,7 +836,10 @@ function render(stats) {
 
   const tracks = played
     .slice()
-    .sort((a, b) => b.seconds - a.seconds)
+    // Whichever measure is selected leads; the other one breaks its ties.
+    .sort((a, b) => (trackSort === 'plays'
+      ? (b.plays || 0) - (a.plays || 0) || b.seconds - a.seconds
+      : b.seconds - a.seconds || (b.plays || 0) - (a.plays || 0)))
     .slice(0, 5)
     .map((t) => trackRow(t, favorites));
   renderTop('tracks', tracks, 'No tracks yet.');
@@ -862,10 +929,10 @@ function setPlayPause(playing) {
   playPauseButton.setAttribute('aria-label', playing ? 'Pause' : 'Play');
 }
 
-async function sendControl(action) {
+async function sendControl(action, value) {
   if (!current || !current.tabId) return;
   try {
-    await chrome.tabs.sendMessage(current.tabId, { type: 'control', action });
+    await chrome.tabs.sendMessage(current.tabId, { type: 'control', action, value });
   } catch (err) {
     // The tab closed, or its content script predates this version.
     return;
@@ -1476,3 +1543,97 @@ document.getElementById('share-facebook').addEventListener('click', () => {
 shareOverlay.addEventListener('click', (event) => {
   if (event.target === shareOverlay) showShare(false);
 });
+
+
+// --- Progress bar ------------------------------------------------------------
+//
+// The page is asked for its position only on each poll; between polls the bar
+// advances on its own clock, and the next poll corrects any drift.
+
+const seekBar = document.getElementById('now-seek');
+const seekFill = document.getElementById('now-seek-fill');
+const seekTime = document.getElementById('now-seek-time');
+let progress = null; // { position, duration, at, paused }
+let dragFraction = null;
+
+function clock(seconds) {
+  const total = Math.max(0, Math.floor(seconds));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = String(total % 60).padStart(2, '0');
+  return h ? `${h}:${String(m).padStart(2, '0')}:${s}` : `${m}:${s}`;
+}
+
+function syncProgress(playing) {
+  const known = Number.isFinite(playing.position) && Number.isFinite(playing.duration) && playing.duration > 0;
+  progress = known
+    ? { position: playing.position, duration: playing.duration, at: performance.now(), paused: Boolean(playing.paused) }
+    : null;
+  // Seeking needs a tab to talk to and a known length.
+  seekBar.hidden = !(progress && playing.canControl && playing.tabId);
+  paintProgress();
+}
+
+function livePosition() {
+  if (!progress) return 0;
+  const elapsed = progress.paused ? 0 : (performance.now() - progress.at) / 1000;
+  return Math.min(progress.duration, progress.position + elapsed);
+}
+
+function paintProgress() {
+  if (!progress || seekBar.hidden || dragFraction !== null) return;
+  const position = livePosition();
+  seekFill.style.width = `${(position / progress.duration) * 100}%`;
+  seekBar.setAttribute('aria-valuemax', String(Math.round(progress.duration)));
+  seekBar.setAttribute('aria-valuenow', String(Math.round(position)));
+  seekBar.setAttribute('aria-valuetext', `${clock(position)} of ${clock(progress.duration)}`);
+}
+
+setInterval(paintProgress, 250);
+
+function fractionAt(event) {
+  const rect = seekBar.getBoundingClientRect();
+  return Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
+}
+
+function showSeek(fraction) {
+  if (!progress) return;
+  seekFill.style.width = `${fraction * 100}%`;
+  seekTime.textContent = clock(fraction * progress.duration);
+  seekTime.style.left = `${Math.max(14, Math.min(seekBar.clientWidth - 14, fraction * seekBar.clientWidth))}px`;
+}
+
+seekBar.addEventListener('mousemove', (event) => {
+  if (dragFraction === null) showSeek(fractionAt(event));
+});
+seekBar.addEventListener('mouseleave', () => paintProgress());
+seekBar.addEventListener('click', (event) => event.stopPropagation());
+seekBar.addEventListener('auxclick', (event) => event.stopPropagation());
+
+seekBar.addEventListener('mousedown', (event) => {
+  if (event.button !== 0 || !progress) return;
+  event.preventDefault();
+  event.stopPropagation();
+  seekBar.classList.add('dragging');
+  dragFraction = fractionAt(event);
+  showSeek(dragFraction);
+
+  const move = (e) => { dragFraction = fractionAt(e); showSeek(dragFraction); };
+  const up = (e) => {
+    document.removeEventListener('mousemove', move);
+    document.removeEventListener('mouseup', up);
+    const fraction = fractionAt(e);
+    seekBar.classList.remove('dragging');
+    dragFraction = null;
+    if (!progress) return;
+    const target = fraction * progress.duration;
+    // Land the bar where the user let go without waiting for the page.
+    progress.position = target;
+    progress.at = performance.now();
+    paintProgress();
+    sendControl('seek', target);
+  };
+  document.addEventListener('mousemove', move);
+  document.addEventListener('mouseup', up);
+});
+

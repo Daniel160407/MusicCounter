@@ -90,8 +90,13 @@
   // page that is always there. Previous and next are the player's own chrome
   // buttons, which know about the playlist or mix you are inside; off a
   // playlist YouTube disables them and the click harmlessly does nothing.
-  function control(action) {
+  function control(action, value) {
     const media = MC.findMedia();
+    if (action === 'seek') {
+      if (!media || !Number.isFinite(media.duration)) return false;
+      media.currentTime = Math.max(0, Math.min(media.duration, value));
+      return true;
+    }
     if (action === 'playPause') {
       if (!media) return false;
       if (media.paused) media.play().catch(() => {});

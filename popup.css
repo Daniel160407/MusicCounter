@@ -61,11 +61,57 @@ h1 {
   gap: 9px;
   background: var(--panel);
   border-radius: 8px;
-  padding: 8px 10px;
+  padding: 8px 10px 11px;
   cursor: pointer;
   transition: background .15s ease;
 }
 .now-row:hover { background: #221e30; }
+.now-row { position: relative; overflow: hidden; }
+
+/* Progress bar along the row's bottom edge. The element is a tall invisible hit
+   area; the visible track is drawn by ::before and the fill. */
+.seek {
+  position: absolute;
+  left: 0; right: 0; bottom: 0;
+  height: 12px;
+  cursor: pointer;
+}
+.seek[hidden] { display: none; }
+.seek::before {
+  content: '';
+  position: absolute;
+  left: 0; right: 0; bottom: 0;
+  height: 3px;
+  background: rgba(255, 255, 255, .08);
+  transition: height .12s ease;
+}
+.seek-fill {
+  position: absolute;
+  left: 0; bottom: 0;
+  height: 3px;
+  width: 0;
+  background: var(--accent);
+  transition: height .12s ease;
+}
+.seek.youtube .seek-fill { background: var(--youtube); }
+.seek.ytmusic .seek-fill { background: var(--ytmusic); }
+.seek.spotify .seek-fill { background: var(--spotify); }
+.seek:hover::before, .seek:hover .seek-fill, .seek.dragging::before, .seek.dragging .seek-fill { height: 6px; }
+.seek-time {
+  position: absolute;
+  bottom: 9px;
+  transform: translateX(-50%);
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: #0d0b14;
+  color: var(--text);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity .12s ease;
+}
+.seek:hover .seek-time, .seek.dragging .seek-time { opacity: 1; }
 /* The row only ever appears when a track starts, not on every poll while it
    keeps playing, so an entrance animation here never replays mid-song. */
 @keyframes rowIn { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: translateY(0); } }
@@ -172,6 +218,12 @@ h2 {
 }
 
 ul { list-style: none; }
+
+.service-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+/* Worth one percentage point of the shares below it, so the bars can be read
+   as time without doing the arithmetic. Lowercase: it is a value, not a label. */
+.per-percent { font-weight: 400; letter-spacing: 0; text-transform: none; font-size: 11px; }
+.per-percent:empty { display: none; }
 
 .bars li { margin-bottom: 8px; }
 .bars .row { display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 3px; }
@@ -289,6 +341,42 @@ ul { list-style: none; }
   cursor: pointer;
 }
 .history-settings select:focus-visible { outline: 1px solid var(--accent); }
+
+.history-search {
+  position: relative;
+  margin-bottom: 10px;
+}
+.history-search input {
+  width: 100%;
+  box-sizing: border-box;
+  background: #1c1830;
+  color: var(--text);
+  border: 1px solid #4a4363;
+  border-radius: 6px;
+  padding: 6px 28px 6px 10px;
+  font: inherit;
+  font-size: 12px;
+}
+.history-search input::placeholder { color: var(--muted); }
+.history-search input:focus-visible { outline: 1px solid var(--accent); }
+.history-search input::-webkit-search-cancel-button { display: none; }
+.history-search-clear {
+  position: absolute;
+  top: 50%;
+  right: 6px;
+  transform: translateY(-50%);
+  width: 18px;
+  height: 18px;
+  border: none;
+  background: none;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  border-radius: 4px;
+}
+.history-search-clear:hover { color: var(--accent); }
+.history-search-clear:focus-visible { outline: 1px solid var(--accent); }
 
 /* Same scrolling-box treatment as #favorites: a long list scrolls in place
    instead of stretching the popup. */
@@ -422,8 +510,8 @@ footer {
   color: var(--muted);
 }
 
-.range { display: flex; gap: 2px; }
-.range-option {
+.range, .sort { display: flex; gap: 2px; }
+.range-option, .sort-option {
   background: none;
   border: none;
   border-radius: 5px;
@@ -435,9 +523,9 @@ footer {
   cursor: pointer;
   transition: background .15s ease, color .15s ease;
 }
-.range-option:hover { color: var(--text); }
-.range-option.on { background: #2b2540; color: var(--accent); }
-.range-option:focus-visible { outline: 1px solid var(--accent); }
+.range-option:hover, .sort-option:hover { color: var(--text); }
+.range-option.on, .sort-option.on { background: #2b2540; color: var(--accent); }
+.range-option:focus-visible, .sort-option:focus-visible { outline: 1px solid var(--accent); }
 
 /* Columns are scaled against the tallest one, so the shape of the week reads at
    a glance even when the whole week was quiet. */

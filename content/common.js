@@ -163,6 +163,8 @@
                 artist: state.artist || '',
                 id: state.id || '',
                 paused: Boolean(state.paused),
+                position: Number.isFinite(state.position) ? state.position : null,
+                duration: Number.isFinite(state.duration) && state.duration > 0 ? state.duration : null,
                 canControl: Boolean(hooks.control),
               }
             : null,
@@ -173,7 +175,7 @@
       if (msg.type === 'control') {
         let ok = false;
         try {
-          ok = hooks.control ? hooks.control(msg.action) !== false : false;
+          ok = hooks.control ? hooks.control(msg.action, msg.value) !== false : false;
         } catch (err) {
           ok = false;
         }

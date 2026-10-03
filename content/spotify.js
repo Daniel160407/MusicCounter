@@ -69,6 +69,21 @@
     return undefined;
   }
 
+  function clockSeconds(selector) {
+    const label = MC.text(document.querySelector(selector));
+    const parts = label.split(':').map(Number);
+    if (parts.length < 2 || !parts.every((n) => Number.isFinite(n))) return undefined;
+    return parts.reduce((total, part) => total * 60 + part, 0);
+  }
+
+  // Both numbers come from the readouts beside the bar so they share one unit.
+  function progressSeconds() {
+    return {
+      position: clockSeconds('[data-testid="playback-position"]'),
+      duration: clockSeconds('[data-testid="playback-duration"]') || trackDuration(),
+    };
+  }
+
   // The cover art shown by the now-playing widget. Spotify has no public,
   // id-derived image URL the way YouTube does, so the only way to get one
   // without OAuth is to read the <img> the player itself already rendered.
@@ -103,7 +118,7 @@
 
     return {
       source: 'spotify',
-      duration: trackDuration(),
+      ...progressSeconds(),
       id: ref.id || ref.title,
       title: ref.title,
       artist: artist(),
@@ -122,7 +137,25 @@
     next: '[data-testid="control-button-skip-forward"]',
   };
 
-  function control(action) {
+  // Spotify exposes no seek API, so click the progress bar where the fraction
+  // falls, the way a pointer would. Best effort: it relies on the page's markup.
+  function seek(seconds) {
+    const { duration } = progressSeconds();
+    const bar = document.querySelector('[data-testid="playback-progressbar"]');
+    if (!bar || !duration) return false;
+    const rect = bar.getBoundingClientRect();
+    const x = rect.left + rect.width * Math.max(0, Math.min(1, seconds / duration));
+    const y = rect.top + rect.height / 2;
+    const init = { bubbles: true, cancelable: true, clientX: x, clientY: y, button: 0, pointerId: 1, isPrimary: true };
+    for (const type of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) {
+      const Ctor = type.startsWith('pointer') ? PointerEvent : MouseEvent;
+      bar.dispatchEvent(new Ctor(type, init));
+    }
+    return true;
+  }
+
+  function control(action, value) {
+    if (action === 'seek') return seek(value);
     const button = document.querySelector(BUTTONS[action] || '');
     if (!button || button.disabled) return false;
     button.click();

@@ -31,6 +31,10 @@
         </button>
       </span>
       <button id="now-star" class="star" aria-pressed="false" title="Add to favorites">★</button>
+      <div id="now-seek" class="seek" role="slider" aria-label="Seek" aria-valuemin="0" aria-valuemax="0" aria-valuenow="0" hidden>
+        <span class="seek-fill" id="now-seek-fill"></span>
+        <span class="seek-time" id="now-seek-time"></span>
+      </div>
     </div>
   </section>
 
@@ -53,12 +57,18 @@
   </section>
 
   <section>
-    <h2>By service</h2>
+    <h2 class="service-head">By service<span id="per-percent" class="per-percent"></span></h2>
     <ul id="sources" class="bars"></ul>
   </section>
 
   <section>
-    <h2>Top tracks</h2>
+    <div class="chart-head">
+      <h2>Top tracks</h2>
+      <div id="track-sort" class="sort" role="group" aria-label="Sort top tracks">
+        <button class="sort-option on" data-sort="seconds" title="Sort by listening time" aria-pressed="true">Time</button>
+        <button class="sort-option" data-sort="plays" title="Sort by number of plays" aria-pressed="false">Plays</button>
+      </div>
+    </div>
     <ul id="tracks" class="list"></ul>
   </section>
 
@@ -122,6 +132,10 @@
           <span id="history-day-label" class="day-nav-label">Today</span>
           <button id="history-next-day" class="day-nav-btn" aria-label="Next day" disabled>›</button>
         </div>
+      </div>
+      <div class="history-search">
+        <input id="history-search" type="search" placeholder="Search title or artist…" aria-label="Search history">
+        <button id="history-search-clear" class="history-search-clear" title="Clear search" aria-label="Clear search" hidden>×</button>
       </div>
       <ul id="history" class="list history-list"></ul>
       <p id="history-note" class="chart-note"></p>
