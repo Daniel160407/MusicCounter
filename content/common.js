@@ -51,6 +51,58 @@
     return best;
   }
 
+  // Volume runs 0–2: up to 1 is the element's own volume, above that a Web
+  // Audio gain boosts it (the phone's slider puts 100% in the middle).
+  const MAX_VOLUME = 2;
+  // media element -> { context, gain }. An element routed through Web Audio
+  // stays routed for good, so this is only built once a boost is asked for.
+  const boosts = new WeakMap();
+
+  // The element's loudness, boost included; muted reads as 0.
+  function mediaVolume(media) {
+    if (!media || !Number.isFinite(media.volume)) return undefined;
+    if (media.muted) return 0;
+    const boost = boosts.get(media);
+    return media.volume * (boost ? boost.gain.gain.value : 1);
+  }
+
+  // Chrome only starts an AudioContext in a tab you've interacted with. The
+  // element is connected only once the context runs: connected to a stopped
+  // one it would go silent. Until then the volume just stays at 100%.
+  function boostFor(media) {
+    const known = boosts.get(media);
+    if (known) return Promise.resolve(known);
+    const context = new AudioContext();
+    return context.resume().then(() => {
+      if (context.state !== 'running' || boosts.has(media)) {
+        context.close();
+        return boosts.get(media) || null;
+      }
+      const gain = context.createGain();
+      context.createMediaElementSource(media).connect(gain).connect(context.destination);
+      const boost = { context, gain };
+      boosts.set(media, boost);
+      return boost;
+    }).catch(() => {
+      context.close().catch(() => {});
+      return null;
+    });
+  }
+
+  // Set from the phone: anything above zero also unmutes, the way dragging
+  // the player's own slider would.
+  function setMediaVolume(media, value, { canBoost = true } = {}) {
+    if (!media || !Number.isFinite(value)) return false;
+    const level = Math.max(0, Math.min(canBoost ? MAX_VOLUME : 1, value));
+    media.volume = Math.min(1, level);
+    if (level > 0) media.muted = false;
+    const extra = Math.max(1, level);
+    const known = boosts.get(media);
+    if (known) known.gain.gain.value = extra;
+    else if (extra > 1) boostFor(media).then((boost) => { if (boost) boost.gain.gain.value = extra; });
+    return true;
+  }
+
   function text(node) {
     return node ? node.textContent.trim() : '';
   }
@@ -58,7 +110,13 @@
   // `hooks` are optional per-site extras:
   //   snapshot() — what the player holds right now, paused included, for the
   //                popup's now-playing row; probe() is used when absent.
-  //   control(action) — 'prev' | 'playPause' | 'next' on the page's own player.
+  //   control(action, value) — 'prev' | 'playPause' | 'next' on the page's own
+  //                player, 'seek' to `value` seconds, 'volume' to `value`
+  //                (0–1, up to 2 where the site can be boosted).
+  //   maxVolume — how far 'volume' goes: 2 with the Web Audio boost, else 1.
+  //   autoplay() — after the worker opened a song for the phone: start it, or on
+  //                a search page open the first result. 'done' once it plays,
+  //                'wait' to be asked again a second later.
   function startTracker(probe, hooks = {}) {
     let lastActiveAt = null;
     let lastKey = null;
@@ -169,13 +227,27 @@
                 title: state.title || '',
                 artist: state.artist || '',
                 id: state.id || '',
+                artwork: state.artwork || '',
                 paused: Boolean(state.paused),
                 position: Number.isFinite(state.position) ? state.position : null,
                 duration: Number.isFinite(state.duration) && state.duration > 0 ? state.duration : null,
+                volume: Number.isFinite(state.volume) ? state.volume : null,
+                maxVolume: hooks.maxVolume || 1,
                 canControl: Boolean(hooks.control),
               }
             : null,
         });
+        return false;
+      }
+
+      if (msg.type === 'autoplay') {
+        let result = 'wait';
+        try {
+          result = hooks.autoplay ? hooks.autoplay() : 'done';
+        } catch (err) {
+          result = 'wait';
+        }
+        sendResponse({ result });
         return false;
       }
 
@@ -207,6 +279,9 @@
     findPlayingMedia,
     findMedia,
     anyMediaPresent,
+    MAX_VOLUME,
+    mediaVolume,
+    setMediaVolume,
     text,
     startTracker,
   };

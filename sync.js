@@ -13,6 +13,7 @@
 //   users/{uid}/favorites/{key}              key, id, title, artist, source, addedAt
 //   users/{uid}/devices/{deviceId}           platform, name, updatedAt, total, firstSeen, sources, parts
 //   users/{uid}/devices/{deviceId}/parts/{n} json   (tracks, artists, days-YYYY, history-YYYY-MM-N)
+//   users/{uid}/live/{deviceId}, users/{uid}/commands/{deviceId}   now playing and phone remote (live.js)
 //
 // A device's `parts` field maps each part's name to a hash of its contents, so a
 // reader only fetches the parts that changed since it last looked, and a writer
@@ -210,6 +211,7 @@ async function signIn() {
 }
 
 async function signOut() {
+  await clearLive().catch(() => {});
   await syncTask(async () => {
     await chrome.storage.local.remove(['syncAuth', 'syncState', 'syncPending']);
     await saveRemote({ devices: {} });
@@ -588,6 +590,8 @@ async function syncStatus() {
     signedIn: Boolean(auth),
     email: auth ? auth.email : '',
     busy: syncBusy,
+    // The first pull after signing in: nothing from the other devices is cached yet.
+    loading: Boolean(auth) && syncBusy && !state.lastPull,
     lastSync: Math.max(state.lastPush || 0, state.lastPull || 0),
     error: state.error || '',
     signInError: auth ? '' : (await chrome.storage.local.get('syncSignInError')).syncSignInError || '',

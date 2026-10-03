@@ -1,6 +1,6 @@
 // Aggregates listening ticks from the content scripts into chrome.storage.local.
 
-importScripts('firebase-config.js', 'sync.js', 'achievements.js');
+importScripts('firebase-config.js', 'sync.js', 'achievements.js', 'tabs.js', 'live.js');
 
 function emptyStats() {
   return {
@@ -374,10 +374,12 @@ async function classifyVideo(videoId) {
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg && msg.type === 'tick') {
     queue = queue.then(() => recordTick(msg)).catch(() => {});
+    startLive();
     return false;
   }
 
   if (msg && msg.type === 'stopped') {
+    startLive();
     // pushLocal reads the stats through the queue, so ticks already sent land first.
     runSync({ push: true });
     return false;

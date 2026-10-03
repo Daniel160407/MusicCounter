@@ -29,6 +29,7 @@
       title,
       artist,
       paused: media.paused,
+      volume: MC.mediaVolume(media),
     };
   }
 
@@ -47,14 +48,28 @@
       media.currentTime = Math.max(0, Math.min(media.duration, value));
       return true;
     }
+    if (action === 'volume') return MC.setMediaVolume(MC.findMedia(), value);
     const button = document.querySelector(BUTTONS[action] || '');
     if (!button) return false;
     button.click();
     return true;
   }
 
+  // A song sent from the phone; searches go to YouTube, so this is always a watch page.
+  function autoplay() {
+    const video = document.querySelector('video');
+    if (location.pathname !== '/watch' || !video || video.readyState < 1) return 'wait';
+    // play() rather than the player bar's toggle, which could pause a song that
+    // just started on its own.
+    if (video.paused) {
+      video.play().catch(() => {});
+      return 'wait';
+    }
+    return 'done';
+  }
+
   MC.startTracker(
     () => current(MC.findPlayingMedia()),
-    { snapshot: () => current(MC.findMedia()), control },
+    { snapshot: () => current(MC.findMedia()), control, autoplay, maxVolume: MC.MAX_VOLUME },
   );
 })();

@@ -86,7 +86,37 @@ Uploads happen whenever the music stops (paused, muted, or its tab closed), and 
 fails offline is retried every minute until it goes through. Other devices are checked every two
 minutes, and every 20 seconds while the popup is open. **Refresh** syncs at once. **Reset**
 erases only this browser's share; the other devices keep theirs. Clicking an iPhone song opens
-a YouTube Music search for it, since no web page can reach the phone's library.
+a YouTube search for it, since no web page can reach the phone's library. While the first
+pull after signing in is still fetching from Firestore, the popup shows a pulsing loading skeleton
+in place of the numbers, lists and charts.
+
+### Control from the phone
+
+While you're signed in, the song loaded in a YouTube, YouTube Music or Spotify tab shows up in the
+iOS app's mini player, with **previous**, **play/pause** and **next** buttons that press the
+page's own controls (the same ones the popup uses). The full player also has a **volume** slider
+that sets the browser player's volume when you let go of it. On YouTube and YouTube Music the
+slider runs from 0% to 200% with the player's own 100% in the middle: up to 100% sets the video's
+volume, and above that a Web Audio gain boosts it (loud tracks can distort). The boost needs a tab
+you've clicked in, since Chrome won't start audio processing otherwise; until then it stays at
+100%. Spotify goes up to 100% only, because its DRM-protected audio can't safely be routed
+through Web Audio; its volume bar gets clicked, so it relies on the page's layout.
+Volume 0 counts as muted, so listening isn't counted while it's there. The phone's own song takes the mini player
+while it plays. The extension checks the tabs every 1.5 seconds and writes to Firestore only when
+the song, the play state or the volume changes, plus once a minute while playing. The playback position
+isn't shared, so the phone shows no progress for it.
+Firestore's REST API can't push to the extension, so it checks for the phone's presses every
+3 seconds while a song is loaded (every 15 seconds once it has been paused for 5 minutes). A
+press takes effect within a few seconds. A song paused for 30 minutes stops being offered, and
+signing out clears it.
+
+From the app's long-press menu, **Play on Chrome on …** sends a song here: the extension opens
+it in that service's tab (or a new one), pauses whatever else was playing, and starts it. A song
+from the iPhone's library, or a YouTube Music song with no usable id, opens the first YouTube
+search result; a Spotify song with no usable id, the first Spotify search result. Searches never
+go to YouTube Music. With nothing playing, the extension checks
+for this every 30 seconds, about 2,900 Firestore reads a day while Chrome is open. Chrome may
+refuse to start sound in a tab you haven't interacted with; the song is then left open, paused.
 
 Sync is off, and the bar at the bottom of the popup hidden, until you set it up:
 
@@ -116,6 +146,10 @@ users/{uid}                              historyRetention, settingsUpdatedAt, fa
 users/{uid}/favorites/{key}              key, id, title, artist, source, addedAt
 users/{uid}/devices/{deviceId}           platform, name, updatedAt, total, firstSeen, sources, parts
 users/{uid}/devices/{deviceId}/parts/{n} json — tracks, artists, days-YYYY, history-YYYY-MM-N
+users/{uid}/live/{deviceId}              platform, name, updatedAt, track — source, id, title,
+                                         artist, artwork, paused, volume, maxVolume
+users/{uid}/commands/{deviceId}          command — id, action (prev | playPause | next | volume | open), at;
+                                         volume adds value (0–2); open adds source, trackId, title, artist
 ```
 
 ## Known limits
@@ -139,6 +173,8 @@ content/youtube.js youtube.com adapter (music-category detection)
 content/ytmusic.js music.youtube.com adapter
 content/spotify.js open.spotify.com adapter
 popup.html/.css/.js  stats UI
+tabs.js            track links, finding the music tabs and asking what they hold (popup and worker)
+live.js            now playing for the phone, the phone's prev/play/next/volume and songs it sends
 achievements.js    achievement definitions and the metrics they are measured by
 sync.js            Firebase sync: Google sign-in, Firestore over REST, merging other devices
 firebase-config.js your Firebase project's apiKey and projectId

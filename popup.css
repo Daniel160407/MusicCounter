@@ -882,3 +882,23 @@ footer {
 @keyframes awardIn { 0% { box-shadow: 0 0 0 0 rgba(177, 145, 255, .6); } 100% { box-shadow: 0 0 0 8px rgba(177, 145, 255, 0); } }
 .award.fresh { animation: awardIn 1.2s ease-out 2; outline: 1px solid #6c58a8; }
 #awards { margin-top: 16px; }
+
+/* Loading skeleton: shown while the first pull from Firestore is in flight. */
+@keyframes skeletonPulse { 0%, 100% { opacity: .45; } 50% { opacity: .9; } }
+body.loading :is(#today-value, #week-value, #month-value, #all-value, #awards-unlocked) {
+  color: transparent;
+  background: #272235;
+  border-radius: 6px;
+  animation: skeletonPulse 1.2s ease-in-out infinite;
+}
+body.loading :is(.bars, .list, .chart, #awards) { pointer-events: none; }
+body.loading :is(.bars, .list, .chart, #awards) > * { display: none; }
+body.loading :is(.bars, .list, .chart, #awards)::before {
+  content: '';
+  display: block;
+  height: 104px;
+  background: repeating-linear-gradient(to bottom, #272235 0 24px, transparent 24px 40px);
+  border-radius: 6px;
+  animation: skeletonPulse 1.2s ease-in-out infinite;
+}
+body.loading .chart-note { visibility: hidden; }

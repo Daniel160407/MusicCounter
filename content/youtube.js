@@ -83,6 +83,7 @@
       title: currentTitle(),
       artist: channelName().replace(/ - Topic$/, ''),
       paused: media.paused,
+      volume: MC.mediaVolume(media),
     };
   }
 
@@ -97,6 +98,8 @@
       media.currentTime = Math.max(0, Math.min(media.duration, value));
       return true;
     }
+    // The element itself, as with play and pause: YouTube's slider only opens on hover.
+    if (action === 'volume') return MC.setMediaVolume(media, value);
     if (action === 'playPause') {
       if (!media) return false;
       if (media.paused) media.play().catch(() => {});
@@ -112,9 +115,35 @@
     return true;
   }
 
+  // A song sent from the phone. A search (a song with no video id) opens the
+  // first video; the watch page then plays it. The browser may still refuse to
+  // start sound in a tab you haven't used, in which case the worker gives up.
+  let openedResult = false;
+  function autoplay() {
+    if (location.pathname === '/results') {
+      // The classic result row or the newer lockup layout, whichever comes first,
+      // skipping sponsored results.
+      const link = [...document.querySelectorAll(
+        'ytd-video-renderer a#thumbnail[href*="/watch?v="], yt-lockup-view-model a[href*="/watch?v="]'
+      )].find((a) => !a.closest('ytd-ad-slot-renderer, ytd-in-feed-ad-layout-renderer'));
+      if (!link || openedResult) return 'wait';
+      openedResult = true;
+      location.assign(link.href);
+      return 'wait';
+    }
+    const video = document.querySelector('video');
+    if (!videoIdFromUrl() || !video || video.readyState < 1) return 'wait';
+    // play() on a playing video does nothing, so this can't toggle it back off.
+    if (video.paused) {
+      video.play().catch(() => {});
+      return 'wait';
+    }
+    return 'done';
+  }
+
   MC.startTracker(
     // Ignore muted previews and the inline miniplayer's silent autoplay.
     () => current(MC.findPlayingMedia()),
-    { snapshot: () => current(MC.findMedia()), control },
+    { snapshot: () => current(MC.findMedia()), control, autoplay, maxVolume: MC.MAX_VOLUME },
   );
 })();

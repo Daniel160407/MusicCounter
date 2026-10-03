@@ -128,6 +128,7 @@
       // icon until the button is used; pressing it still does the right thing,
       // because Spotify's own button is what gets clicked.
       paused: !buttonSaysPause(),
+      volume: volume(),
     };
   }
 
@@ -137,14 +138,12 @@
     next: '[data-testid="control-button-skip-forward"]',
   };
 
-  // Spotify exposes no seek API, so click the progress bar where the fraction
+  // Spotify exposes no seek or volume API, so click a bar where the fraction
   // falls, the way a pointer would. Best effort: it relies on the page's markup.
-  function seek(seconds) {
-    const { duration } = progressSeconds();
-    const bar = document.querySelector('[data-testid="playback-progressbar"]');
-    if (!bar || !duration) return false;
+  function clickBarAt(bar, fraction) {
     const rect = bar.getBoundingClientRect();
-    const x = rect.left + rect.width * Math.max(0, Math.min(1, seconds / duration));
+    if (!rect.width) return false;
+    const x = rect.left + rect.width * Math.max(0, Math.min(1, fraction));
     const y = rect.top + rect.height / 2;
     const init = { bubbles: true, cancelable: true, clientX: x, clientY: y, button: 0, pointerId: 1, isPrimary: true };
     for (const type of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) {
@@ -154,12 +153,66 @@
     return true;
   }
 
+  function seek(seconds) {
+    const { duration } = progressSeconds();
+    const bar = document.querySelector('[data-testid="playback-progressbar"]');
+    if (!bar || !duration) return false;
+    return clickBarAt(bar, seconds / duration);
+  }
+
+  const VOLUME_BAR = '[data-testid="volume-bar"]';
+
+  // The volume bar's hidden range input, else the media element, which
+  // Spotify keeps at the slider's level.
+  function volume() {
+    const input = document.querySelector(`${VOLUME_BAR} input[type="range"]`);
+    const max = input ? Number(input.max) : NaN;
+    if (input && Number.isFinite(max) && max > 0) {
+      const value = Number(input.value);
+      if (Number.isFinite(value)) return Math.max(0, Math.min(1, value / max));
+    }
+    return MC.mediaVolume(document.querySelector('video, audio'));
+  }
+
+  // No boost past 100% here: Spotify's audio is DRM-protected, and routing it
+  // through Web Audio can leave the tab silent.
+  function setVolume(value) {
+    const bar = document.querySelector(`${VOLUME_BAR} [data-testid="progress-bar"]`) ||
+      document.querySelector(VOLUME_BAR);
+    if (!bar || !Number.isFinite(value)) return false;
+    return clickBarAt(bar, value);
+  }
+
   function control(action, value) {
     if (action === 'seek') return seek(value);
+    if (action === 'volume') return setVolume(value);
     const button = document.querySelector(BUTTONS[action] || '');
     if (!button || button.disabled) return false;
     button.click();
     return true;
+  }
+
+  // A song sent from the phone. A search opens the first track; a track page
+  // gets its big Play button pressed once, which Spotify then labels Pause.
+  let openedResult = false;
+  let pressedPlay = false;
+  function autoplay() {
+    if (location.pathname.startsWith('/search/')) {
+      const link = document.querySelector('[data-testid="tracklist-row"] a[href^="/track/"]');
+      if (!link || openedResult) return 'wait';
+      openedResult = true;
+      location.assign(link.href);
+      return 'wait';
+    }
+    if (!location.pathname.startsWith('/track/')) return 'done';
+    const button = document.querySelector('[data-testid="action-bar-row"] [data-testid="play-button"]');
+    if (!button) return 'wait';
+    if (/paus/i.test(button.getAttribute('aria-label') || '')) return 'done';
+    if (!pressedPlay) {
+      pressedPlay = true;
+      button.click();
+    }
+    return 'wait';
   }
 
   MC.startTracker(() => {
@@ -192,5 +245,5 @@
       artist: artist(),
       artwork: artworkUrl(),
     };
-  }, { snapshot, control });
+  }, { snapshot, control, autoplay });
 })();
