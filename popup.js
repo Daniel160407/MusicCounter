@@ -2,6 +2,7 @@ const SOURCE_NAMES = {
   ytmusic: 'YouTube Music',
   youtube: 'YouTube',
   spotify: 'Spotify',
+  ios: 'iPhone',
 };
 
 function formatDuration(seconds) {
@@ -53,6 +54,9 @@ function trackUrl(track) {
   const id = track.id || '';
   const query = encodeURIComponent([track.artist, track.title].filter(Boolean).join(' '));
 
+  // Songs counted on the iPhone come from its own music library, which no web
+  // page can open; a YouTube Music search is the nearest place to play them.
+  if (track.source === 'ios') return `https://music.youtube.com/search?q=${query}`;
   if (track.source === 'spotify') {
     return SPOTIFY_ID.test(id)
       ? `https://open.spotify.com/track/${id}`
@@ -87,7 +91,7 @@ function trackThumbnail(track) {
 function artistUrl(name, source) {
   const query = encodeURIComponent(name);
   if (source === 'spotify') return `https://open.spotify.com/search/${query}`;
-  if (source === 'ytmusic') return `https://music.youtube.com/search?q=${query}`;
+  if (source === 'ytmusic' || source === 'ios') return `https://music.youtube.com/search?q=${query}`;
   return `https://www.youtube.com/results?search_query=${query}`;
 }
 
@@ -509,7 +513,7 @@ function renderNowPlaying(stats) {
 // services that made it up, scaled against the tallest column rather than an
 // absolute figure — the question they answer is "when", not "how much".
 
-const CHART_SOURCES = ['ytmusic', 'youtube', 'spotify'];
+const CHART_SOURCES = ['ytmusic', 'youtube', 'spotify', 'ios'];
 
 function partsOf(entry) {
   const parts = {};
@@ -761,10 +765,84 @@ document.getElementById('hours-next-day').addEventListener('click', () => {
   load();
 });
 
+// --- Achievements --------------------------------------------------------------
+
+// Badges earned since the Awards tab was last opened. Captured when the tab is
+// opened, so they keep their highlight for the rest of this popup's life even
+// though the worker is told they've been seen.
+let freshAwards = new Set();
+let awardsSignature = '';
+
+function awardProgress(a) {
+  if (a.unit === 'flag') return '';
+  if (a.unit === 'time') return `${formatDuration(a.value)} / ${formatDuration(a.goal)}`;
+  const fmt = (n) => Math.floor(n).toLocaleString();
+  return `${fmt(a.value)} / ${fmt(a.goal)}${a.unit === 'days' ? ' days' : ''}`;
+}
+
+function renderAchievements(achievements) {
+  const list = (achievements && achievements.list) || [];
+  const unseen = (achievements && achievements.unseen) || [];
+  document.getElementById('awards-dot').hidden = unseen.length === 0;
+
+  const awardsTabOpen = !document.getElementById('panel-awards').hidden;
+  if (awardsTabOpen && unseen.length) {
+    unseen.forEach((id) => freshAwards.add(id));
+    chrome.runtime.sendMessage({ type: 'seenAchievements' });
+  }
+
+  // The poll redraws every two seconds; only rebuild when something moved.
+  const signature = JSON.stringify([list.map((a) => [a.value, a.unlockedAt]), [...freshAwards]]);
+  if (signature === awardsSignature) return;
+  awardsSignature = signature;
+
+  const earned = list.filter((a) => a.unlockedAt);
+  document.getElementById('awards-unlocked').textContent = earned.length;
+  document.getElementById('awards-total').textContent = list.length;
+  document.getElementById('awards-meter-fill').style.width = `${list.length ? (earned.length / list.length) * 100 : 0}%`;
+
+  // The locked badge you're furthest along on is the one worth chasing.
+  const next = list
+    .filter((a) => !a.unlockedAt && a.unit !== 'flag')
+    .sort((a, b) => b.value / b.goal - a.value / a.goal)[0];
+  document.getElementById('awards-next').textContent = earned.length === list.length && list.length
+    ? 'Every achievement earned. Impressive.'
+    : next ? `Closest: ${next.title} — ${awardProgress(next)}.` : '';
+
+  const groups = new Map();
+  for (const a of list) {
+    if (!groups.has(a.group)) groups.set(a.group, []);
+    groups.get(a.group).push(a);
+  }
+
+  document.getElementById('awards').innerHTML = [...groups].map(([group, items]) => `
+    <section>
+      <h2 class="service-head">${escapeHtml(group)}<span class="per-percent">${items.filter((a) => a.unlockedAt).length}/${items.length}</span></h2>
+      <ul class="awards">${items.map((a) => {
+        const pct = Math.round((a.value / a.goal) * 100);
+        const state = a.unlockedAt ? 'earned' : 'locked';
+        const meta = a.unlockedAt
+          ? `Earned ${escapeHtml(formatWhen(a.unlockedAt))}`
+          : escapeHtml(awardProgress(a));
+        return `
+        <li class="award ${state}${freshAwards.has(a.id) ? ' fresh' : ''}" title="${escapeHtml(a.text)}">
+          <span class="award-icon" aria-hidden="true">${a.icon}</span>
+          <span class="award-body">
+            <span class="award-title">${escapeHtml(a.title)}${freshAwards.has(a.id) ? '<em>New</em>' : ''}</span>
+            <small>${escapeHtml(a.text)}</small>
+            ${a.unlockedAt || a.unit === 'flag' ? '' : `<span class="award-bar"><i style="width:${pct}%"></i></span>`}
+          </span>
+          <span class="award-meta">${meta}</span>
+        </li>`;
+      }).join('')}</ul>
+    </section>`).join('');
+}
+
 const TABS = [
   { tab: 'tab-overview', panel: 'panel-overview' },
   { tab: 'tab-analytics', panel: 'panel-analytics' },
   { tab: 'tab-history', panel: 'panel-history' },
+  { tab: 'tab-awards', panel: 'panel-awards' },
 ];
 
 function showTab(id) {
@@ -775,6 +853,7 @@ function showTab(id) {
     tab.setAttribute('aria-selected', on ? 'true' : 'false');
     document.getElementById(entry.panel).hidden = !on;
   }
+  if (id === 'tab-awards' && latest) renderAchievements(latest.achievements);
 }
 
 TABS.forEach((entry) => {
@@ -809,6 +888,8 @@ function render(stats) {
   renderSources(stats);
   renderAnalytics(stats);
   renderHistory(stats.history);
+  renderAchievements(stats.achievements);
+  renderSync(stats.sync);
 
   const retention = (stats.settings && stats.settings.historyRetention) || 'forever';
   // Don't yank the value out from under an open dropdown, and don't touch it
@@ -976,9 +1057,73 @@ const refreshButton = document.getElementById('refresh');
 
 refreshButton.addEventListener('click', async () => {
   refreshButton.classList.add('busy');
+  // Signed in, a refresh also trades numbers with the other devices first.
+  if (latest && latest.sync && latest.sync.signedIn) await chrome.runtime.sendMessage({ type: 'syncNow' });
   await load();
   // Brief flash so a click that changes nothing still feels like it did something.
   setTimeout(() => refreshButton.classList.remove('busy'), 200);
+});
+
+// --- Sync --------------------------------------------------------------------
+
+function formatAgo(ts) {
+  const seconds = Math.round((Date.now() - ts) / 1000);
+  if (seconds < 60) return 'just now';
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+  return formatWhen(ts);
+}
+
+// What the sign-in attempt has to say (waiting, or why it failed). The poll
+// redraws the bar every 2 seconds and must not wipe this out.
+let signInNote = null;
+
+function renderSync(sync) {
+  const section = document.getElementById('sync');
+  // Until firebase-config.js is filled in there is nothing to offer.
+  if (!sync || !sync.configured) {
+    section.hidden = true;
+    return;
+  }
+  section.hidden = false;
+
+  const status = document.getElementById('sync-status');
+  const action = document.getElementById('sync-action');
+  if (!sync.signedIn) {
+    const note = signInNote || (sync.signInError && { text: `Sign-in failed: ${sync.signInError}`, error: true });
+    status.textContent = note ? note.text : 'Sign in to combine these stats with the iPhone app.';
+    status.classList.toggle('error', Boolean(note && note.error));
+    action.textContent = 'Sign in';
+    action.dataset.action = 'signIn';
+    return;
+  }
+
+  const others = sync.devices.length;
+  const parts = [sync.email];
+  if (others > 0) parts.push(`+ ${others} other ${others === 1 ? 'device' : 'devices'}`);
+  if (sync.busy) parts.push('syncing…');
+  else if (sync.lastSync) parts.push(`synced ${formatAgo(sync.lastSync)}`);
+  status.textContent = sync.error ? `Sync failed: ${sync.error}` : parts.join(' · ');
+  status.title = sync.devices.map((d) => d.name).join(', ');
+  status.classList.toggle('error', Boolean(sync.error));
+  action.textContent = 'Sign out';
+  action.dataset.action = 'signOut';
+}
+
+document.getElementById('sync-action').addEventListener('click', async (event) => {
+  const button = event.currentTarget;
+  const type = button.dataset.action;
+  if (!type) return;
+  button.disabled = true;
+  if (type === 'signIn') {
+    signInNote = { text: 'Waiting for the Google window… check behind this one.' };
+    if (latest) renderSync(latest.sync);
+  }
+  // Signing in opens Google's account picker, which can close this popup; the
+  // worker carries on regardless and the next open shows the result.
+  const reply = await chrome.runtime.sendMessage({ type });
+  button.disabled = false;
+  signInNote = reply && reply.error ? { text: `Sign-in failed: ${reply.error}`, error: true } : null;
+  load();
 });
 
 const confirmOverlay = document.getElementById('confirm');
@@ -1205,6 +1350,7 @@ const CARD_COLORS = {
   youtube: '#ff4e45',
   ytmusic: '#ff8a3d',
   spotify: '#1ed760',
+  ios: '#4aa8ff',
 };
 
 function fit(ctx, text, maxWidth) {

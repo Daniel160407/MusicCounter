@@ -70,6 +70,12 @@
     let playCounted = false;
     let historyLogged = false;
 
+    // Music just stopped (paused, muted, or the tab is going away): the worker
+    // uploads to Firestore at this point rather than on a timer.
+    function reportStopped() {
+      chrome.runtime.sendMessage({ type: 'stopped' }).catch(() => {});
+    }
+
     function cycle() {
       let now;
       try {
@@ -77,6 +83,7 @@
         const state = probe();
 
         if (!state) {
+          if (lastActiveAt !== null) reportStopped();
           lastActiveAt = null;
           return;
         }
@@ -184,6 +191,11 @@
       }
 
       return false;
+    });
+
+    // Closing the tab mid-song never shows up as a pause.
+    window.addEventListener('pagehide', () => {
+      if (lastActiveAt !== null) reportStopped();
     });
 
     setInterval(cycle, CHECK_MS);

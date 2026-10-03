@@ -42,6 +42,7 @@
     <button id="tab-overview" class="tab on" role="tab" aria-selected="true" aria-controls="panel-overview">Overview</button>
     <button id="tab-analytics" class="tab" role="tab" aria-selected="false" aria-controls="panel-analytics">Analytics</button>
     <button id="tab-history" class="tab" role="tab" aria-selected="false" aria-controls="panel-history">History</button>
+    <button id="tab-awards" class="tab" role="tab" aria-selected="false" aria-controls="panel-awards" title="Achievements">Awards<span id="awards-dot" class="tab-dot" hidden></span></button>
   </nav>
 
   <div id="panel-overview" class="panel" role="tabpanel" aria-labelledby="tab-overview">
@@ -142,12 +143,26 @@
     </section>
   </div>
 
+  <div id="panel-awards" class="panel" role="tabpanel" aria-labelledby="tab-awards" hidden>
+    <section class="awards-summary">
+      <div class="awards-count"><span id="awards-unlocked">0</span><small>/<span id="awards-total">0</span></small></div>
+      <div class="awards-meter"><span id="awards-meter-fill"></span></div>
+      <p id="awards-next" class="chart-note"></p>
+    </section>
+    <div id="awards"></div>
+  </div>
+
+  <section id="sync" class="sync" hidden>
+    <span id="sync-status" class="sync-status"></span>
+    <button id="sync-action" class="ghost"></button>
+  </section>
+
   <footer id="footer"></footer>
 
   <div id="confirm" class="overlay" hidden>
     <div class="dialog" role="alertdialog" aria-labelledby="confirm-title" aria-describedby="confirm-body">
       <h3 id="confirm-title">Erase all data?</h3>
-      <p id="confirm-body">Every recorded second, artist, track and play in your history will be deleted. Your starred favorites are kept. This cannot be undone.</p>
+      <p id="confirm-body">Every second, artist, track and play recorded in this browser will be deleted. Your starred favorites, earned achievements, and anything your other synced devices recorded, are kept. This cannot be undone.</p>
       <div class="dialog-actions">
         <button id="confirm-cancel" class="ghost">Cancel</button>
         <button id="confirm-erase" class="danger">Erase</button>

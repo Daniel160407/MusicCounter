@@ -1,5 +1,7 @@
 // Aggregates listening ticks from the content scripts into chrome.storage.local.
 
+importScripts('firebase-config.js', 'sync.js', 'achievements.js');
+
 function emptyStats() {
   return {
     total: 0,
@@ -33,6 +35,14 @@ const DEFAULT_SETTINGS = { historyRetention: 'forever' };
 
 // Serialise read-modify-write so concurrent ticks can't clobber each other.
 let queue = Promise.resolve();
+
+// Runs `task` on the queue and hands back its result. Never call it from inside
+// a task that is already on the queue: it would wait on itself.
+function serialized(task) {
+  const run = queue.then(task);
+  queue = run.catch(() => {});
+  return run;
+}
 
 function dayKey(ts) {
   const d = new Date(ts);
@@ -107,10 +117,8 @@ function pruneHistory(history, retention) {
   return next;
 }
 
-async function setHistoryRetention(msg) {
-  const retention = Object.prototype.hasOwnProperty.call(RETENTION_MS, msg.retention)
-    ? msg.retention
-    : 'forever';
+async function applyHistoryRetention(value) {
+  const retention = Object.prototype.hasOwnProperty.call(RETENTION_MS, value) ? value : 'forever';
   const settings = await loadSettings();
   settings.historyRetention = retention;
   const history = pruneHistory(await loadHistory(), retention);
@@ -118,7 +126,64 @@ async function setHistoryRetention(msg) {
   return { settings, history };
 }
 
+async function setHistoryRetention(msg) {
+  const result = await applyHistoryRetention(msg.retention);
+  await noteRetentionChange(result.settings.historyRetention);
+  return result;
+}
+
+// --- Achievements --------------------------------------------------------------
+//
+// Earned badges live under their own key, like favourites: Reset erases the
+// numbers but not what they already earned. `unseen` drives the toolbar badge
+// until the popup's Awards tab is opened.
+
+async function loadAchievements() {
+  const stored = await chrome.storage.local.get('achievements');
+  return Object.assign({ unlocked: {}, unseen: [] }, stored.achievements || {});
+}
+
+function showAchievementBadge(unseen) {
+  chrome.action.setBadgeText({ text: unseen.length ? String(unseen.length) : '' });
+  if (unseen.length) chrome.action.setBadgeBackgroundColor({ color: '#b191ff' });
+}
+
+// Must run on the queue: it read-modify-writes the stored record.
+async function recordAchievements(stats, favorites) {
+  const saved = await loadAchievements();
+  const list = evaluateAchievements(stats, favorites, saved.unlocked);
+  const fresh = list.filter((a) => a.unlockedAt && !saved.unlocked[a.id]);
+  if (fresh.length) {
+    for (const a of fresh) saved.unlocked[a.id] = a.unlockedAt;
+    saved.unseen = saved.unseen.concat(fresh.map((a) => a.id));
+    await chrome.storage.local.set({ achievements: saved });
+    showAchievementBadge(saved.unseen);
+  }
+  return { list, unseen: saved.unseen };
+}
+
+// Checked on each new play, so a badge lights up without opening the popup.
+async function checkAchievements() {
+  const stats = await loadStats();
+  const merged = await mergeRemote(stats, []);
+  await recordAchievements(merged.stats, await loadFavorites());
+}
+
+async function markAchievementsSeen() {
+  const saved = await loadAchievements();
+  saved.unseen = [];
+  await chrome.storage.local.set({ achievements: saved });
+  showAchievementBadge([]);
+}
+
 async function toggleFavorite(msg) {
+  const before = await loadFavorites();
+  const result = await toggleFavoriteLocally(msg);
+  await noteFavoriteChanges(before, await loadFavorites());
+  return result;
+}
+
+async function toggleFavoriteLocally(msg) {
   const key = String((msg && msg.key) || '');
   if (!key) return { favorite: false };
 
@@ -238,6 +303,8 @@ async function recordTick(msg) {
     history = pruneHistory(history, settings.historyRetention);
     await chrome.storage.local.set({ history });
   }
+
+  if (msg.newPlay || msg.newHistoryEntry) await checkAchievements();
 }
 
 
@@ -310,22 +377,62 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     return false;
   }
 
+  if (msg && msg.type === 'stopped') {
+    // pushLocal reads the stats through the queue, so ticks already sent land first.
+    runSync({ push: true });
+    return false;
+  }
+
   if (msg && msg.type === 'classifyVideo') {
     classifyVideo(msg.videoId).then((music) => sendResponse({ music })).catch(() => sendResponse({ music: false }));
     return true;
   }
 
   if (msg && msg.type === 'getStats') {
-    queue = queue
-      .then(async () => ({
-        ...(await loadStats()),
-        favorites: await loadFavorites(),
-        history: await loadHistory(),
-        settings: await loadSettings(),
-      }))
+    pullIfStale();
+    serialized(async () => ({
+      stats: await loadStats(),
+      history: await loadHistory(),
+      favorites: await loadFavorites(),
+      settings: await loadSettings(),
+    }))
+      // Merged outside the queue: it only reads the cached remote data.
+      .then(async ({ stats, history, favorites, settings }) => {
+        const merged = await mergeRemote(stats, history);
+        const achievements = await serialized(() => recordAchievements(merged.stats, favorites));
+        return { ...merged.stats, history: merged.history, favorites, settings, achievements, sync: await syncStatus() };
+      })
       .then((stats) => sendResponse(stats))
       .catch(() => sendResponse(emptyStats()));
     return true;
+  }
+
+  if (msg && msg.type === 'signIn') {
+    signIn()
+      .then(() => chrome.storage.local.remove('syncSignInError'))
+      .then(() => sendResponse({ ok: true }))
+      .catch(async (err) => {
+        const error = String((err && err.message) || err);
+        // Kept for the next popup: this one has usually closed behind Google's window.
+        await chrome.storage.local.set({ syncSignInError: error });
+        sendResponse({ ok: false, error });
+      });
+    return true;
+  }
+
+  if (msg && msg.type === 'signOut') {
+    signOut().then(() => sendResponse({ ok: true })).catch(() => sendResponse({ ok: false }));
+    return true;
+  }
+
+  if (msg && msg.type === 'syncNow') {
+    runSync({ push: true, pull: true }).then(() => sendResponse({ ok: true })).catch(() => sendResponse({ ok: false }));
+    return true;
+  }
+
+  if (msg && msg.type === 'seenAchievements') {
+    serialized(markAchievementsSeen).catch(() => {});
+    return false;
   }
 
   if (msg && msg.type === 'toggleFavorite') {
@@ -347,10 +454,17 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg && msg.type === 'reset') {
     queue = queue
       .then(() => chrome.storage.local.set({ stats: emptyStats(), history: [] }))
-      .then(() => sendResponse({ ok: true }))
+      .then(() => {
+        // Only this browser's share is erased; other devices keep theirs.
+        runSync({ push: true });
+        sendResponse({ ok: true });
+      })
       .catch(() => sendResponse({ ok: false }));
     return true;
   }
 
   return false;
 });
+
+// The toolbar badge doesn't survive a browser restart; put it back.
+loadAchievements().then((saved) => showAchievementBadge(saved.unseen)).catch(() => {});
