@@ -194,7 +194,11 @@
 
   <div id="panel-playlists" class="panel" role="tabpanel" aria-labelledby="tab-playlists" hidden>
     <section id="pl-playing" class="pl-playing" hidden>
-      <span class="pl-playing-text"><small>Playing playlist</small><span id="pl-playing-name"></span></span>
+      <span class="pulse" aria-hidden="true"><i></i><i></i><i></i></span>
+      <button id="pl-playing-open" class="pl-playing-text" title="Open the playlist">
+        <small>Playing playlist</small>
+        <span class="pl-playing-line"><span id="pl-playing-name"></span><span id="pl-playing-pos" class="pl-playing-pos"></span></span>
+      </button>
       <span class="transport">
         <button id="pl-prev" class="tbtn" title="Previous song in the playlist" aria-label="Previous song in the playlist">
           <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 3h2v10H4zm10 0v10L6.5 8z"/></svg>
@@ -206,15 +210,23 @@
           <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M10 3h2v10h-2zM2 3l7.5 5L2 13z"/></svg>
         </button>
       </span>
+      <span class="pl-progress" aria-hidden="true"><span id="pl-progress-fill"></span></span>
     </section>
 
     <div id="pl-index">
       <section>
-        <h2>Playlists</h2>
-        <form id="pl-create" class="pl-form">
-          <input id="pl-create-name" type="text" maxlength="80" placeholder="New playlist name" aria-label="New playlist name">
-          <button type="submit" class="ghost">Create</button>
+        <div class="chart-head">
+          <h2>Playlists <span id="pl-total" class="pl-total"></span></h2>
+        </div>
+        <form id="pl-create" class="pl-form pl-field">
+          <svg class="pl-field-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M7.25 2h1.5v5.25H14v1.5H8.75V14h-1.5V8.75H2v-1.5h5.25z"/></svg>
+          <input id="pl-create-name" type="text" maxlength="80" placeholder="New playlist" aria-label="New playlist name" autocomplete="off">
+          <button type="submit" class="pl-submit" disabled>Create</button>
         </form>
+        <div id="pl-search-wrap" class="pl-field pl-search" hidden>
+          <svg class="pl-field-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M6.75 2a4.75 4.75 0 0 1 3.8 7.6l3.42 3.42-1.06 1.06-3.42-3.42A4.75 4.75 0 1 1 6.75 2zm0 1.5a3.25 3.25 0 1 0 0 6.5 3.25 3.25 0 0 0 0-6.5z"/></svg>
+          <input id="pl-search" type="search" placeholder="Find a playlist" aria-label="Find a playlist" autocomplete="off">
+        </div>
         <ul id="pl-list" class="list pl-list"></ul>
         <p class="chart-note">Mix YouTube, YouTube Music and Spotify songs: each one opens in its own service's tab, and the next starts when it finishes. Add songs with the + on any song, or paste a link.</p>
       </section>
@@ -222,17 +234,31 @@
 
     <div id="pl-detail" hidden>
       <section>
-        <div class="pl-detail-head">
-          <button id="pl-back" class="day-nav-btn" title="All playlists" aria-label="All playlists">‹</button>
-          <input id="pl-name" class="pl-name" type="text" maxlength="80" aria-label="Playlist name" title="Rename the playlist">
-          <button id="pl-play" class="ghost" title="Play from the first song">Play</button>
-          <button id="pl-delete" class="ghost pl-delete" title="Delete this playlist">Delete</button>
+        <div class="pl-hero">
+          <button id="pl-back" class="day-nav-btn" title="All playlists (Esc)" aria-label="All playlists">‹</button>
+          <span id="pl-cover" class="pl-cover-slot"></span>
+          <div class="pl-hero-text">
+            <label class="pl-name-wrap" title="Rename the playlist">
+              <input id="pl-name" class="pl-name" type="text" maxlength="80" aria-label="Playlist name" autocomplete="off">
+              <svg class="pl-pencil" viewBox="0 0 16 16" aria-hidden="true"><path d="M11.3 1.9a1.5 1.5 0 0 1 2.1 0l.7.7a1.5 1.5 0 0 1 0 2.1L5.6 13.2 2 14l.8-3.6zM3.9 11.1l-.4 1.4 1.4-.4 6.9-6.9-1-1z"/></svg>
+            </label>
+            <small id="pl-meta" class="pl-meta"></small>
+          </div>
         </div>
-        <form id="pl-link" class="pl-form">
-          <input id="pl-link-url" type="url" placeholder="Paste a YouTube or Spotify song link" aria-label="Song link">
-          <button type="submit" class="ghost">Add</button>
+        <div class="pl-actions">
+          <button id="pl-play" class="pl-play-btn" title="Play from the first song">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4.5 3l8 5-8 5z"/></svg><span>Play</span>
+          </button>
+          <button id="pl-delete" class="pl-delete" title="Delete this playlist">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6 1.5h4l.5 1H14V4H2V2.5h3.5zM3.25 5h9.5l-.7 8.6A1.5 1.5 0 0 1 10.56 15H5.44a1.5 1.5 0 0 1-1.5-1.4z"/></svg><span>Delete</span>
+          </button>
+        </div>
+        <form id="pl-link" class="pl-form pl-field">
+          <svg class="pl-field-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M6.6 9.4a2.6 2.6 0 0 0 3.7 0l2.6-2.6a2.6 2.6 0 0 0-3.7-3.7l-.9.9 1.06 1.06.9-.9a1.1 1.1 0 0 1 1.57 1.57L9.24 8.34a1.1 1.1 0 0 1-1.57 0zm2.8-2.8a2.6 2.6 0 0 0-3.7 0L3.1 9.2a2.6 2.6 0 0 0 3.7 3.7l.9-.9-1.06-1.06-.9.9a1.1 1.1 0 0 1-1.57-1.57l2.59-2.6a1.1 1.1 0 0 1 1.57 0z"/></svg>
+          <input id="pl-link-url" type="url" placeholder="Paste a YouTube or Spotify song link" aria-label="Song link" autocomplete="off">
+          <button type="submit" class="pl-submit" disabled>Add</button>
         </form>
-        <p id="pl-link-note" class="chart-note pl-note"></p>
+        <p id="pl-link-note" class="chart-note pl-note" role="status"></p>
         <ul id="pl-tracks" class="list pl-tracks"></ul>
         <p id="pl-detail-note" class="chart-note"></p>
       </section>
@@ -260,11 +286,12 @@
   <div id="add-overlay" class="overlay" hidden>
     <div class="dialog add-dialog" role="dialog" aria-labelledby="add-title" aria-modal="true">
       <h3 id="add-title">Add to a playlist</h3>
-      <p id="add-song" class="add-song"></p>
+      <div id="add-song" class="add-song"></div>
       <ul id="add-list" class="list add-list"></ul>
-      <form id="add-create" class="pl-form">
-        <input id="add-create-name" type="text" maxlength="80" placeholder="New playlist name" aria-label="New playlist name">
-        <button type="submit" class="ghost">Create</button>
+      <form id="add-create" class="pl-form pl-field">
+        <svg class="pl-field-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M7.25 2h1.5v5.25H14v1.5H8.75V14h-1.5V8.75H2v-1.5h5.25z"/></svg>
+        <input id="add-create-name" type="text" maxlength="80" placeholder="New playlist with this song" aria-label="New playlist name" autocomplete="off">
+        <button type="submit" class="pl-submit" disabled>Create</button>
       </form>
       <p id="add-note" class="chart-note pl-note"></p>
       <div class="dialog-actions">

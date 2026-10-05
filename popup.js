@@ -1332,6 +1332,7 @@ document.addEventListener('keydown', (event) => {
   if (!confirmOverlay.hidden) showConfirm(false);
   else if (!shareOverlay.hidden) showShare(false);
   else if (!addOverlay.hidden) closeAddDialog();
+  else if (openPlaylistId && !document.getElementById('panel-playlists').hidden) closePlaylist();
 });
 
 // Keep the numbers live while the popup is open; content scripts report every
@@ -1993,6 +1994,17 @@ seekBar.addEventListener('mousedown', (event) => {
 let openPlaylistId = null;
 let playlistsSignature = '';
 let playlistTracksSignature = '';
+// The song just removed from the open playlist, for a few seconds, so Undo can put it back.
+let removedSong = null;
+let removedTimer = null;
+
+// Below this many playlists the whole list fits, and a search field is only clutter.
+const PLAYLIST_SEARCH_FROM = 6;
+
+const PLAY_ICON = '<svg class="icon-play" viewBox="0 0 16 16" aria-hidden="true"><path d="M4.5 3l8 5-8 5z"/></svg>';
+const STOP_ICON = '<svg class="icon-stop" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4h8v8H4z"/></svg>';
+const PULSE = '<span class="pulse" aria-hidden="true"><i></i><i></i><i></i></span>';
+const NOTE_ICON = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M12 2v8.5a2 2 0 1 1-1.5-1.94V4.5L6 5.5v6.5a2 2 0 1 1-1.5-1.94V3.5z"/></svg>';
 
 function playlistsByName(playlists) {
   return Object.values(playlists || {})
@@ -2011,6 +2023,27 @@ function serviceDots(tracks) {
     : '';
 }
 
+// Four different song covers in a grid, or the first one alone when there are
+// fewer, or a note in the first song's service colour when there are none.
+function playlistCover(tracks, size = '') {
+  const covers = [...new Set(tracks.map(trackThumbnail).filter(Boolean))];
+  const img = (src) => `<img src="${escapeHtml(src)}" alt="" loading="lazy">`;
+  if (covers.length >= 4) return `<span class="pl-cover grid ${size}" aria-hidden="true">${covers.slice(0, 4).map(img).join('')}</span>`;
+  if (covers.length) return `<span class="pl-cover ${size}" aria-hidden="true">${img(covers[0])}</span>`;
+  return `<span class="pl-cover empty ${tracks.length ? tracks[0].source : ''} ${size}" aria-hidden="true">${NOTE_ICON}</span>`;
+}
+
+// A cover that won't load leaves its tile's background in its place.
+function hideBrokenCovers(root) {
+  root.querySelectorAll('.pl-cover img').forEach((img) => {
+    img.addEventListener('error', () => { img.style.visibility = 'hidden'; }, { once: true });
+  });
+}
+
+function playingPosition(playing) {
+  return `${Math.min(playing.index + 1, playing.count)} of ${playing.count}`;
+}
+
 function playlistMessage(type, fields) {
   return chrome.runtime.sendMessage({ type, ...fields });
 }
@@ -2027,42 +2060,78 @@ function renderPlaylists(stats) {
   const bar = document.getElementById('pl-playing');
   bar.hidden = !playing;
   if (playing) {
-    document.getElementById('pl-playing-name').textContent =
-      `${playing.name} · ${Math.min(playing.index + 1, playing.count)} of ${playing.count}`;
+    document.getElementById('pl-playing-name').textContent = playing.name;
+    document.getElementById('pl-playing-pos').textContent = playingPosition(playing);
+    document.getElementById('pl-progress-fill').style.width =
+      `${playing.count ? (Math.min(playing.index + 1, playing.count) / playing.count) * 100 : 0}%`;
   }
 
   if (openPlaylistId && !playlists[openPlaylistId]) openPlaylistId = null;
   document.getElementById('pl-index').hidden = Boolean(openPlaylistId);
   document.getElementById('pl-detail').hidden = !openPlaylistId;
 
-  const sorted = playlistsByName(playlists);
-  const signature = JSON.stringify([sorted, playing && playing.id]);
+  const all = playlistsByName(playlists);
+  document.getElementById('pl-total').textContent = all.length ? String(all.length) : '';
+  const search = document.getElementById('pl-search');
+  const searchWrap = document.getElementById('pl-search-wrap');
+  // Kept while it holds a search, so deleting down to five doesn't hide what filtered them.
+  searchWrap.hidden = all.length < PLAYLIST_SEARCH_FROM && !search.value;
+  const query = search.value.trim().toLocaleLowerCase();
+  const shown = query ? all.filter((p) => p.name.toLocaleLowerCase().includes(query)) : all;
+
+  const signature = JSON.stringify([shown, playing && [playing.id, playing.index, playing.count], all.length]);
   if (signature !== playlistsSignature) {
     playlistsSignature = signature;
     const list = document.getElementById('pl-list');
     const scroll = list.scrollTop;
-    list.innerHTML = sorted.length
-      ? sorted.map((p) => `
-        <li class="clickable" data-id="${escapeHtml(p.id)}" title="Open ${escapeHtml(p.name)}">
-          <span class="name">${escapeHtml(p.name)}${playing && playing.id === p.id ? ' ♪' : ''}<small>${songCount(p.tracks.length)}${serviceDots(p.tracks)}</small></span>
-          ${p.tracks.length ? `<button class="list-play" data-id="${escapeHtml(p.id)}" title="Play" aria-label="Play ${escapeHtml(p.name)}">
-            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4.5 3l8 5-8 5z"/></svg></button>` : ''}
-        </li>`).join('')
-      : '<li class="empty">No playlists yet.</li>';
+    const focused = document.activeElement && list.contains(document.activeElement)
+      ? document.activeElement.closest('li[data-id]') : null;
+    list.innerHTML = shown.length
+      ? shown.map((p) => {
+        const on = Boolean(playing && playing.id === p.id);
+        const name = escapeHtml(p.name);
+        return `
+        <li class="clickable pl-row${on ? ' playing' : ''}" data-id="${escapeHtml(p.id)}" tabindex="0" role="button" aria-label="Open ${name}" title="Open ${name}">
+          ${playlistCover(p.tracks)}
+          <span class="name">${name}<small>${on
+            ? `<span class="pl-now">Playing ${playingPosition(playing)}</span>`
+            : songCount(p.tracks.length)}${serviceDots(p.tracks)}</small></span>
+          ${on
+            ? `<button class="pl-row-play" data-stop="1" title="Stop the playlist" aria-label="Stop ${name}">${PULSE}${STOP_ICON}</button>`
+            : p.tracks.length
+              ? `<button class="pl-row-play" data-id="${escapeHtml(p.id)}" title="Play" aria-label="Play ${name}">${PLAY_ICON}</button>`
+              : ''}
+        </li>`;
+      }).join('')
+      : all.length
+        ? '<li class="empty">No matching playlists.</li>'
+        : `<li class="pl-empty">${playlistCover([], 'large')}<b>No playlists yet</b><span>Name one above, or use the + on any song.</span></li>`;
     list.scrollTop = scroll;
-    list.querySelectorAll('li.clickable').forEach((li) => {
+    hideBrokenCovers(list);
+    list.querySelectorAll('li[data-id]').forEach((li) => {
       li.addEventListener('click', (event) => {
         if (event.target.closest('button')) return;
         showPlaylist(li.dataset.id);
       });
+      li.addEventListener('keydown', (event) => {
+        if (event.target !== li || (event.key !== 'Enter' && event.key !== ' ')) return;
+        event.preventDefault();
+        showPlaylist(li.dataset.id);
+      });
     });
-    list.querySelectorAll('button.list-play').forEach((button) => {
+    list.querySelectorAll('button.pl-row-play').forEach((button) => {
       button.addEventListener('click', (event) => {
         event.stopPropagation();
         flash(button, 'press');
-        playPlaylist(button.dataset.id, 0);
+        if (button.dataset.stop) stopPlaylistNow();
+        else playPlaylist(button.dataset.id, 0);
       });
     });
+    // A redraw while a row had the keyboard's focus hands it to the same row.
+    if (focused) {
+      const again = list.querySelector(`li[data-id="${CSS.escape(focused.dataset.id)}"]`);
+      if (again) again.focus();
+    }
   }
 
   if (openPlaylistId) renderPlaylistDetail(playlists[openPlaylistId], playing);
@@ -2071,17 +2140,33 @@ function renderPlaylists(stats) {
 function renderPlaylistDetail(playlist, playing) {
   const name = document.getElementById('pl-name');
   if (document.activeElement !== name && name.value !== playlist.name) name.value = playlist.name;
-  document.getElementById('pl-play').disabled = playlist.tracks.length === 0;
 
-  const currentIndex = playing && playing.id === playlist.id ? playing.index : -1;
-  const signature = JSON.stringify([playlist.tracks, currentIndex]);
+  const tracks = playlist.tracks;
+  const on = Boolean(playing && playing.id === playlist.id);
+  const play = document.getElementById('pl-play');
+  play.disabled = tracks.length === 0;
+  play.querySelector('span').textContent = on ? 'Start over' : 'Play';
+  play.title = tracks.length ? 'Play from the first song' : 'Add a song to play this playlist';
+
+  const services = new Set(tracks.map((t) => t.source)).size;
+  document.getElementById('pl-meta').innerHTML = on
+    ? `<span class="pl-now">Playing ${playingPosition(playing)}</span>${serviceDots(tracks)}`
+    : tracks.length
+      ? `${songCount(tracks.length)}${services > 1 ? ` · ${services} services` : ''}${serviceDots(tracks)}`
+      : 'Empty playlist';
+
+  const currentIndex = on ? playing.index : -1;
+  const signature = JSON.stringify([tracks, currentIndex]);
   // Rebuilding the rows mid-drag would drop the one in your hand.
   if (signature === playlistTracksSignature || trackDrag) return;
   playlistTracksSignature = signature;
 
+  const cover = document.getElementById('pl-cover');
+  cover.innerHTML = playlistCover(tracks, 'large');
+  hideBrokenCovers(cover);
+
   const list = document.getElementById('pl-tracks');
   const note = document.getElementById('pl-detail-note');
-  const tracks = playlist.tracks;
   if (tracks.length === 0) {
     list.innerHTML = '<li class="empty">No songs yet. Use the + on any song, or paste a link above.</li>';
     note.textContent = '';
@@ -2092,13 +2177,13 @@ function renderPlaylistDetail(playlist, playing) {
     const thumb = trackThumbnail(t);
     return `
     <li class="clickable${index === currentIndex ? ' current' : ''}" data-index="${index}" title="Click to play the playlist from here, drag to move">
-      <span class="pos" tabindex="0" role="button" aria-label="Move ${escapeHtml(t.title || t.id)}: Alt and the arrow keys"><span class="pos-num">${index === currentIndex ? '♪' : index + 1}</span><svg class="grip" viewBox="0 0 10 16" aria-hidden="true"><circle cx="3" cy="3" r="1.4"/><circle cx="7" cy="3" r="1.4"/><circle cx="3" cy="8" r="1.4"/><circle cx="7" cy="8" r="1.4"/><circle cx="3" cy="13" r="1.4"/><circle cx="7" cy="13" r="1.4"/></svg></span>
+      <span class="pos" tabindex="0" role="button" aria-label="Move ${escapeHtml(t.title || t.id)}: Alt and the arrow keys"><span class="pos-num">${index === currentIndex ? PULSE : index + 1}</span><svg class="grip" viewBox="0 0 10 16" aria-hidden="true"><circle cx="3" cy="3" r="1.4"/><circle cx="7" cy="3" r="1.4"/><circle cx="3" cy="8" r="1.4"/><circle cx="7" cy="8" r="1.4"/><circle cx="3" cy="13" r="1.4"/><circle cx="7" cy="13" r="1.4"/></svg></span>
       ${thumb
         ? `<img class="thumb" src="${escapeHtml(thumb)}" alt="" loading="lazy">`
         : '<span class="thumb thumb-empty">♪</span>'}
       <span class="name">${escapeHtml(t.title || t.id)}<small>${escapeHtml(
         [t.artist, SOURCE_NAMES[t.source]].filter(Boolean).join(' · '))}</small></span>
-      <button class="row-btn remove" data-remove="${index}" title="Remove from the playlist" aria-label="Remove from the playlist">×</button>
+      <button class="row-btn remove" data-remove="${index}" title="Remove from the playlist" aria-label="Remove ${escapeHtml(t.title || t.id)} from the playlist">×</button>
     </li>`;
   }).join('');
   list.scrollTop = scroll;
@@ -2133,13 +2218,15 @@ function renderPlaylistDetail(playlist, playing) {
   list.querySelectorAll('button[data-remove]').forEach((button) => {
     button.addEventListener('click', async (event) => {
       event.stopPropagation();
-      await playlistMessage('removeFromPlaylist', { id: playlist.id, index: Number(button.dataset.remove) });
+      const index = Number(button.dataset.remove);
+      const track = tracks[index];
+      const reply = await playlistMessage('removeFromPlaylist', { id: playlist.id, index });
+      if (reply && reply.playlist && track) offerUndo(playlist.id, track, index);
       load();
     });
   });
 
-  const services = new Set(tracks.map((t) => t.source)).size;
-  note.textContent = `${songCount(tracks.length)}${services > 1 ? ` from ${services} services` : ''}. Click a song to play from there, drag it to move it.`;
+  note.textContent = 'Click a song to play from there, drag it to move it.';
 }
 
 // --- Reordering by drag ------------------------------------------------------
@@ -2250,13 +2337,64 @@ function startTrackDrag(event, li, playlistId) {
   li.addEventListener('pointercancel', end);
 }
 
+// --- Undoing a removal ------------------------------------------------------
+//
+// The × is a single click away from a title, so a removal can be taken back for
+// a few seconds: the song goes back in at the end, then moves to where it was.
+
+const linkNote = document.getElementById('pl-link-note');
+
+function offerUndo(playlistId, track, index) {
+  removedSong = { playlistId, track, index };
+  linkNote.classList.remove('error');
+  linkNote.innerHTML = `Removed ${escapeHtml(track.title || track.id)}.<button type="button" class="pl-undo">Undo</button>`;
+  linkNote.querySelector('.pl-undo').addEventListener('click', undoRemove);
+  clearTimeout(removedTimer);
+  removedTimer = setTimeout(clearUndo, 6000);
+}
+
+function clearUndo() {
+  clearTimeout(removedTimer);
+  removedSong = null;
+  if (linkNote.querySelector('.pl-undo')) setNote(linkNote, '');
+}
+
+async function undoRemove() {
+  const undo = removedSong;
+  clearUndo();
+  if (!undo) return;
+  const reply = await playlistMessage('addToPlaylist', { id: undo.playlistId, track: undo.track });
+  if (!reply || reply.error) {
+    setNote(linkNote, (reply && reply.error) || 'Could not put the song back.', true);
+    return;
+  }
+  const last = reply.playlist.tracks.length - 1;
+  const to = Math.min(undo.index, last);
+  if (to !== last) await playlistMessage('moveInPlaylist', { id: undo.playlistId, from: last, to });
+  load();
+}
+
+// --- Moving between the list and a playlist ---------------------------------
+
 function showPlaylist(id) {
   openPlaylistId = id;
   playlistTracksSignature = '';
-  setNote(document.getElementById('pl-link-note'), '');
+  clearUndo();
+  setNote(linkNote, '');
   resetDeleteButton();
   document.getElementById('pl-tracks').scrollTop = 0;
   if (latest) renderPlaylists(latest);
+}
+
+// Back to the list, with the keyboard's focus on the playlist it came from.
+function closePlaylist() {
+  const id = openPlaylistId;
+  openPlaylistId = null;
+  clearUndo();
+  resetDeleteButton();
+  if (latest) renderPlaylists(latest);
+  const row = id && document.querySelector(`#pl-list li[data-id="${CSS.escape(id)}"]`);
+  if (row) row.focus();
 }
 
 function playPlaylist(id, index) {
@@ -2265,20 +2403,44 @@ function playPlaylist(id, index) {
   setTimeout(load, 600);
 }
 
+function stopPlaylistNow() {
+  playlistMessage('stopPlaylist');
+  setTimeout(load, 400);
+}
+
+// The create and add buttons only light up once there is something to submit.
+function enableWhenFilled(input) {
+  const button = input.form.querySelector('button[type="submit"]');
+  const update = () => { button.disabled = !input.value.trim(); };
+  input.addEventListener('input', update);
+  return update;
+}
+
+const createInput = document.getElementById('pl-create-name');
+const updateCreateButton = enableWhenFilled(createInput);
 document.getElementById('pl-create').addEventListener('submit', async (event) => {
   event.preventDefault();
-  const input = document.getElementById('pl-create-name');
-  const reply = await playlistMessage('createPlaylist', { name: input.value });
+  if (!createInput.value.trim()) return;
+  const reply = await playlistMessage('createPlaylist', { name: createInput.value });
   if (reply && reply.playlist) {
-    input.value = '';
+    createInput.value = '';
+    updateCreateButton();
+    document.getElementById('pl-search').value = '';
     await load();
     showPlaylist(reply.playlist.id);
+    // Straight on to the songs: the link field is what a new playlist needs next.
+    document.getElementById('pl-link-url').focus();
   }
 });
 
-document.getElementById('pl-back').addEventListener('click', () => {
-  openPlaylistId = null;
+document.getElementById('pl-search').addEventListener('input', () => {
   if (latest) renderPlaylists(latest);
+});
+
+document.getElementById('pl-back').addEventListener('click', closePlaylist);
+document.getElementById('pl-playing-open').addEventListener('click', () => {
+  const playing = latest && latest.playlistPlaying;
+  if (playing && playing.id !== openPlaylistId) showPlaylist(playing.id);
 });
 
 const playlistNameInput = document.getElementById('pl-name');
@@ -2290,7 +2452,15 @@ async function renameOpenPlaylist() {
 playlistNameInput.addEventListener('change', renameOpenPlaylist);
 playlistNameInput.addEventListener('keydown', (event) => {
   if (event.key === 'Enter') playlistNameInput.blur();
+  // Escape gives up the rename, rather than leaving the playlist.
+  if (event.key === 'Escape') {
+    event.stopPropagation();
+    const playlist = latest && latest.playlists && latest.playlists[openPlaylistId];
+    if (playlist) playlistNameInput.value = playlist.name;
+    playlistNameInput.blur();
+  }
 });
+playlistNameInput.addEventListener('focus', () => playlistNameInput.select());
 
 document.getElementById('pl-play').addEventListener('click', () => {
   if (openPlaylistId) playPlaylist(openPlaylistId, 0);
@@ -2302,13 +2472,13 @@ let deleteTimer = null;
 function resetDeleteButton() {
   clearTimeout(deleteTimer);
   deleteButton.classList.remove('confirming');
-  deleteButton.textContent = 'Delete';
+  deleteButton.querySelector('span').textContent = 'Delete';
 }
 deleteButton.addEventListener('click', async () => {
   if (!openPlaylistId) return;
   if (!deleteButton.classList.contains('confirming')) {
     deleteButton.classList.add('confirming');
-    deleteButton.textContent = 'Delete?';
+    deleteButton.querySelector('span').textContent = 'Delete?';
     deleteTimer = setTimeout(resetDeleteButton, 3000);
     return;
   }
@@ -2318,32 +2488,44 @@ deleteButton.addEventListener('click', async () => {
   load();
 });
 
-document.getElementById('pl-link').addEventListener('submit', async (event) => {
+const linkForm = document.getElementById('pl-link');
+const linkInput = document.getElementById('pl-link-url');
+const updateLinkButton = enableWhenFilled(linkInput);
+linkForm.addEventListener('submit', async (event) => {
   event.preventDefault();
-  const input = document.getElementById('pl-link-url');
-  const note = document.getElementById('pl-link-note');
-  const button = event.currentTarget.querySelector('button');
-  if (!openPlaylistId || !input.value.trim()) return;
+  const button = linkForm.querySelector('button');
+  if (!openPlaylistId || !linkInput.value.trim() || button.dataset.busy) return;
+  button.dataset.busy = '1';
   button.disabled = true;
-  setNote(note, 'Looking it up…');
+  clearUndo();
+  setNote(linkNote, 'Looking it up…');
   try {
-    const found = await playlistMessage('resolveSongLink', { url: input.value });
+    const found = await playlistMessage('resolveSongLink', { url: linkInput.value });
     if (!found || found.error) {
-      setNote(note, (found && found.error) || 'Could not read that link.', true);
+      setNote(linkNote, (found && found.error) || 'Could not read that link.', true);
       return;
     }
     const reply = await playlistMessage('addToPlaylist', { id: openPlaylistId, track: found.track });
     if (reply && reply.error) {
-      setNote(note, reply.error, true);
+      setNote(linkNote, reply.error, true);
       return;
     }
-    input.value = '';
-    setNote(note, `Added ${found.track.title}.`);
-    setTimeout(() => { if (note.textContent === `Added ${found.track.title}.`) setNote(note, ''); }, 3000);
+    linkInput.value = '';
+    const added = `Added ${found.track.title}.`;
+    setNote(linkNote, added);
+    setTimeout(() => { if (linkNote.textContent === added) setNote(linkNote, ''); }, 3000);
     load();
   } finally {
-    button.disabled = false;
+    delete button.dataset.busy;
+    updateLinkButton();
   }
+});
+// A pasted link is the whole request, so it is added without a further click.
+linkInput.addEventListener('paste', () => {
+  setTimeout(() => {
+    updateLinkButton();
+    if (/^https?:\/\//i.test(linkInput.value.trim())) linkForm.requestSubmit();
+  }, 0);
 });
 
 document.getElementById('pl-prev').addEventListener('click', (event) => {
@@ -2358,25 +2540,34 @@ document.getElementById('pl-next').addEventListener('click', (event) => {
 });
 document.getElementById('pl-stop').addEventListener('click', (event) => {
   flash(event.currentTarget, 'press');
-  playlistMessage('stopPlaylist');
-  setTimeout(load, 400);
+  stopPlaylistNow();
 });
 
 // --- Adding a song to a playlist ---------------------------------------------
 
 const addOverlay = document.getElementById('add-overlay');
 const addNote = document.getElementById('add-note');
+const addCreateInput = document.getElementById('add-create-name');
+const updateAddCreateButton = enableWhenFilled(addCreateInput);
 let addingTrack = null;
 
 function openAddDialog(track) {
   if (!track || !(track.title || track.id)) return;
   addingTrack = { id: track.id || '', title: track.title || '', artist: track.artist || '', source: track.source };
-  document.getElementById('add-song').innerHTML = `${escapeHtml(addingTrack.title || addingTrack.id)}${
-    addingTrack.artist ? ` <small>· ${escapeHtml(addingTrack.artist)}</small>` : ''}`;
+  const thumb = trackThumbnail(addingTrack);
+  document.getElementById('add-song').innerHTML = `${thumb
+    ? `<img class="thumb" src="${escapeHtml(thumb)}" alt="">`
+    : '<span class="thumb thumb-empty">♪</span>'}<span class="name">${escapeHtml(addingTrack.title || addingTrack.id)}<small>${escapeHtml(
+    [addingTrack.artist, SOURCE_NAMES[addingTrack.source]].filter(Boolean).join(' · '))}</small></span>`;
+  const img = document.querySelector('#add-song img');
+  if (img) img.addEventListener('error', () => { img.style.visibility = 'hidden'; }, { once: true });
   setNote(addNote, '');
-  document.getElementById('add-create-name').value = '';
+  addCreateInput.value = '';
+  updateAddCreateButton();
   renderAddList();
   addOverlay.hidden = false;
+  // With no playlists yet, naming one is the only thing to do.
+  if (!Object.keys((latest && latest.playlists) || {}).length) addCreateInput.focus();
 }
 
 function closeAddDialog() {
@@ -2391,15 +2582,23 @@ function renderAddList() {
   list.innerHTML = sorted.length
     ? sorted.map((p) => {
       const has = p.tracks.some((t) => `${t.source}:${t.id || t.title}` === key);
+      const name = escapeHtml(p.name);
       return `
-      <li class="clickable" data-id="${escapeHtml(p.id)}" title="${has ? 'Already in this playlist' : `Add to ${escapeHtml(p.name)}`}">
-        <span class="name">${escapeHtml(p.name)}<small>${songCount(p.tracks.length)}</small></span>
-        <span class="meta"><span class="time">${has ? '✓' : '+'}</span></span>
+      <li class="clickable${has ? ' has' : ''}" data-id="${escapeHtml(p.id)}" tabindex="0" role="button"
+        title="${has ? 'Already in this playlist' : `Add to ${name}`}" aria-label="${has ? `Already in ${name}` : `Add to ${name}`}">
+        ${playlistCover(p.tracks, 'small')}
+        <span class="name">${name}<small>${songCount(p.tracks.length)}</small></span>
+        <span class="add-state" aria-hidden="true">${has ? '✓' : '+'}</span>
       </li>`;
     }).join('')
     : '<li class="empty">No playlists yet — name one below.</li>';
-  list.querySelectorAll('li.clickable').forEach((li) => {
-    li.addEventListener('click', async () => {
+  hideBrokenCovers(list);
+  list.querySelectorAll('li[data-id]').forEach((li) => {
+    const add = async () => {
+      if (li.classList.contains('has')) {
+        setNote(addNote, 'Already in that playlist.');
+        return;
+      }
       const reply = await playlistMessage('addToPlaylist', { id: li.dataset.id, track: addingTrack });
       if (reply && reply.error) {
         setNote(addNote, reply.error, true);
@@ -2407,14 +2606,20 @@ function renderAddList() {
       }
       await load();
       closeAddDialog();
+    };
+    li.addEventListener('click', add);
+    li.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter' && event.key !== ' ') return;
+      event.preventDefault();
+      add();
     });
   });
 }
 
 document.getElementById('add-create').addEventListener('submit', async (event) => {
   event.preventDefault();
-  const input = document.getElementById('add-create-name');
-  const reply = await playlistMessage('createPlaylist', { name: input.value, track: addingTrack });
+  if (!addCreateInput.value.trim()) return;
+  const reply = await playlistMessage('createPlaylist', { name: addCreateInput.value, track: addingTrack });
   if (!reply || reply.error) {
     setNote(addNote, (reply && reply.error) || 'Could not create the playlist.', true);
     return;

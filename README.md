@@ -77,8 +77,11 @@ The **Playlists** tab holds playlists that mix YouTube, YouTube Music and Spotif
 and click **Create**, then add songs with the **+** on any song in Top tracks, Favorites, History
 or the now-playing row, or paste a YouTube, YouTube Music or Spotify song link into the playlist
 (the title is looked up from the site's public oEmbed endpoint; offline the song is added under
-its id and still plays). Rows can be moved up and down or removed, the name edited in place, and
-**Delete** asks once more on the button itself.
+its id and still plays; a pasted link is added at once). Each playlist shows a cover made from up
+to four of its songs' artwork, and from six playlists on a search field filters them by name.
+Rows can be dragged (or moved with Alt and the arrow keys) or removed — a removal can be taken back
+with **Undo** for a few seconds — the name edited in place (Escape gives up the edit), and
+**Delete** asks once more on the button itself. Escape goes back from a playlist to the list.
 
 **Play** (or clicking a song, to start from there) opens each song in its service's tab — the tab
 you already have, or a new one — and starts it. When it finishes, the next song starts, in
@@ -90,7 +93,8 @@ counts as finished when its player stops at the end, or moves on by itself withi
 seconds (YouTube Music and Spotify go straight to their own next song, which is then paused, as is
 YouTube's "Up next" countdown, for 20 seconds). Moving to another song any other way — a skip on
 the page, another video clicked — stops the playlist rather than skipping through it. While a
-playlist plays, a bar at the top of the tab shows it with previous, stop and next, and the
+playlist plays, a bar at the top of the tab shows it with how far along it is, previous, stop and
+next (clicking its name opens the playlist), the playlist's row shows it playing and stops it, and the
 now-playing row's previous and next step through the playlist instead of the site's own queue.
 Closing the tab stops it too. A song from the iPhone's library plays as the first YouTube search
 result. Chrome may refuse to start sound in a tab you haven't clicked in, which leaves that song
