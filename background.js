@@ -389,7 +389,70 @@ const PLAYLIST_EDITS = {
   moveInPlaylist,
 };
 
+// Pinning: a toolbar popup always closes when it loses focus, so "pinned" means
+// the same page in a window of its own that stays until it is closed. While it
+// is open the toolbar button brings it forward instead of opening a second copy.
+const PINNED_KEY = 'pinnedWindowId';
+
+async function pinnedWindowId() {
+  const { [PINNED_KEY]: id } = await chrome.storage.session.get(PINNED_KEY);
+  return typeof id === 'number' ? id : null;
+}
+
+async function unpinned() {
+  await chrome.storage.session.remove(PINNED_KEY);
+  await chrome.action.setPopup({ popup: 'popup.html' });
+}
+
+async function pinPopup() {
+  const existing = await pinnedWindowId();
+  if (existing !== null) {
+    try {
+      await chrome.windows.update(existing, { focused: true });
+      return;
+    } catch (err) {
+      // Closed while the worker was asleep; open a fresh one.
+    }
+  }
+  const win = await chrome.windows.create({
+    url: 'popup.html?pinned=1',
+    type: 'popup',
+    width: 352,
+    height: 640,
+    focused: true,
+  });
+  await chrome.storage.session.set({ [PINNED_KEY]: win.id });
+  await chrome.action.setPopup({ popup: '' });
+}
+
+chrome.action.onClicked.addListener(async () => {
+  const id = await pinnedWindowId();
+  try {
+    if (id !== null) {
+      await chrome.windows.update(id, { focused: true });
+      return;
+    }
+  } catch (err) {
+    // The window is gone; fall through.
+  }
+  await unpinned();
+  // A click on a button with no popup can't open one, so reopen pinned.
+  await pinPopup();
+});
+
+chrome.windows.onRemoved.addListener(async (windowId) => {
+  if (windowId === await pinnedWindowId()) await unpinned();
+});
+
+// Windows don't outlive the browser, so neither does a pin.
+chrome.runtime.onStartup.addListener(() => { unpinned(); });
+
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg && msg.type === 'pinPopup') {
+    pinPopup().then(() => sendResponse({ ok: true }), (err) => sendResponse({ error: String(err) }));
+    return true;
+  }
+
   if (msg && msg.type === 'tick') {
     queue = queue.then(() => recordTick(msg)).catch(() => {});
     startLive();

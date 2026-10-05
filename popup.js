@@ -5,6 +5,15 @@ const SOURCE_NAMES = {
   ios: 'iPhone',
 };
 
+// Opened from the Pin button, the page lives in a window of its own: it stays
+// open after you jump to a song, and only Unpin (or closing it) puts it away.
+const PINNED = new URLSearchParams(location.search).has('pinned');
+if (PINNED) document.documentElement.classList.add('pinned');
+
+function closePopup() {
+  if (!PINNED) window.close();
+}
+
 function formatDuration(seconds) {
   const totalMinutes = Math.round(seconds / 60);
   const s = Math.round(seconds);
@@ -82,7 +91,7 @@ async function openUrl(url, event) {
     // queued up in one go.
     const active = Boolean(event.shiftKey);
     await chrome.tabs.create({ url, active });
-    if (active) window.close();
+    if (active) closePopup();
     return;
   }
 
@@ -96,7 +105,7 @@ async function openUrl(url, event) {
       if (!current || tab.windowId !== current.windowId) {
         await chrome.windows.update(tab.windowId, { focused: true });
       }
-      window.close();
+      closePopup();
       return;
     }
   } catch (err) {
@@ -105,7 +114,7 @@ async function openUrl(url, event) {
   }
 
   await chrome.tabs.create({ url });
-  window.close();
+  closePopup();
 }
 
 function renderSources(stats) {
@@ -1127,7 +1136,7 @@ async function focusPlayingTab() {
     const tab = await chrome.tabs.get(current.tabId);
     await chrome.tabs.update(tab.id, { active: true });
     await chrome.windows.update(tab.windowId, { focused: true });
-    window.close();
+    closePopup();
     return true;
   } catch (err) {
     // The tab closed between the poll and the click.
@@ -1817,6 +1826,21 @@ async function shareTo(site, url) {
   await chrome.tabs.create({ url, active: true });
   say(`Card saved to your downloads${copied ? ' and the caption copied' : ''}. Add it to your ${site} post.`, true);
 }
+
+const pinButton = document.getElementById('pin');
+if (PINNED) {
+  pinButton.setAttribute('aria-pressed', 'true');
+  pinButton.title = 'Unpin: close this window';
+  pinButton.setAttribute('aria-label', pinButton.title);
+}
+pinButton.addEventListener('click', async () => {
+  if (PINNED) {
+    window.close();
+    return;
+  }
+  const reply = await chrome.runtime.sendMessage({ type: 'pinPopup' }).catch(() => null);
+  if (reply && reply.ok) window.close();
+});
 
 document.getElementById('share').addEventListener('click', () => showShare(true));
 document.getElementById('share-close').addEventListener('click', () => showShare(false));

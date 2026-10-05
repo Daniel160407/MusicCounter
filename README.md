@@ -46,6 +46,14 @@ it away, so flicking through a playlist adds no plays. Replaying a song from the
 another one. Where the track length cannot be read — a live stream, an older Spotify layout —
 a flat minute of listening counts instead.
 
+## Pinning the popup
+
+The popup's header buttons are icons — **Share**, **Refresh**, **Reset** and **Pin**, left to
+right; hover one for its name. A toolbar popup closes as soon as you click elsewhere. **Pin**
+reopens it in a small window of its own that stays open — opening a song from it no longer
+closes it — until you press the button again (now **Unpin**) or close the window. While it is
+pinned, the toolbar icon brings that window to the front instead of opening a second copy.
+
 ## Opening a song
 
 Clicking a row opens that song in the tab you already have for its service — your open

@@ -8,9 +8,18 @@
   <header>
     <h1>Music Counter</h1>
     <div class="actions">
-      <button id="share" title="Share your listening as an image">Share</button>
-      <button id="refresh" title="Refresh the numbers now">Refresh</button>
-      <button id="reset" title="Erase all recorded time">Reset</button>
+      <button id="share" class="hbtn" title="Share your listening as an image" aria-label="Share your listening as an image">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1 4.5 4.5l1.06 1.06L7.25 3.87V10h1.5V3.87l1.69 1.69L11.5 4.5zM2.5 8v5.5A1.5 1.5 0 0 0 4 15h8a1.5 1.5 0 0 0 1.5-1.5V8H12v5.5H4V8z"/></svg>
+      </button>
+      <button id="refresh" class="hbtn" title="Refresh the numbers now" aria-label="Refresh the numbers now">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.5a5.5 5.5 0 0 1 4.6 2.5H10.5v1.5h4.5V2h-1.5v1.8A7 7 0 1 0 15 8h-1.5A5.5 5.5 0 1 1 8 2.5z"/></svg>
+      </button>
+      <button id="reset" class="hbtn" title="Reset: erase all recorded time" aria-label="Reset: erase all recorded time">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6 1.5h4V3h4v1.5H2V3h4zM3.5 5.5H5l.6 8h4.8l.6-8h1.5l-.7 9.5H4.2z"/></svg>
+      </button>
+      <button id="pin" class="hbtn" aria-pressed="false" title="Pin: keep this window open" aria-label="Pin: keep this window open">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M10.2 1.5 14.5 5.8l-1.06 1.06-.7-.35-2.6 2.6.35 2.24-1.06 1.06L7 10l-3.7 3.7-1-1L6 9 3.6 6.6l1.06-1.06 2.24.35 2.6-2.6-.35-.7z"/></svg>
+      </button>
     </div>
   </header>
 

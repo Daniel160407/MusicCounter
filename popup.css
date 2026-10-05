@@ -24,6 +24,7 @@ header {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 6px;
   margin-bottom: 14px;
 }
 
@@ -32,26 +33,39 @@ h1 {
   font-weight: 600;
   letter-spacing: .06em;
   text-transform: uppercase;
+  white-space: nowrap;
   color: var(--muted);
 }
 
 .actions { display: flex; gap: 6px; }
 
-#refresh, #reset {
+/* Header buttons: icon-only squares, their meaning in the tooltip. Share and
+   Refresh in the accent colour; Reset and Pin stay muted until pinned. */
+.hbtn {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 24px;
   background: none;
   border: 1px solid #332e45;
-  color: var(--muted);
   border-radius: 6px;
-  padding: 3px 8px;
-  font-size: 11px;
+  color: var(--muted);
   cursor: pointer;
   transition: color .15s ease, border-color .15s ease, transform .1s ease;
 }
-#refresh:hover, #reset:hover { color: var(--text); border-color: #4a4363; }
-#refresh:active, #reset:active { transform: scale(.94); }
-#refresh { color: var(--accent); border-color: #3d3358; }
-@keyframes busyPulse { 0%, 100% { opacity: .5; } 50% { opacity: .85; } }
-#refresh.busy { animation: busyPulse .5s ease-in-out infinite; }
+.hbtn svg { width: 13px; height: 13px; fill: currentColor; }
+.hbtn:hover { color: var(--text); border-color: #4a4363; }
+.hbtn:active { transform: scale(.94); }
+#share, #refresh { color: var(--accent); border-color: #3d3358; }
+#share:hover, #refresh:hover { color: var(--text); border-color: #4a4363; }
+#reset:hover { color: #ff6b7a; border-color: #5a2f3a; }
+#pin[aria-pressed="true"] { color: var(--accent); border-color: #3d3358; background: #241f36; }
+@keyframes spin { to { transform: rotate(360deg); } }
+#refresh.busy svg { animation: spin .6s linear infinite; }
+
+/* Pinned, the page keeps the popup's width, centred in its own window. */
+html.pinned { background: var(--bg); }
+html.pinned body { margin: 0 auto; }
 
 /* Now playing: a live row above the totals, gone the moment nothing plays. */
 .now { margin-bottom: 14px; }
@@ -777,16 +791,6 @@ footer {
 
 /* Share: the dialog is a preview of the very PNG that gets saved, so what you
    post is what you looked at. Drawn at 1080x1350 and scaled down to fit. */
-#share {
-  background: none;
-  border: 1px solid #3d3358;
-  color: var(--accent);
-  border-radius: 6px;
-  padding: 3px 8px;
-  font-size: 11px;
-  cursor: pointer;
-}
-#share:hover { color: var(--text); border-color: #4a4363; }
 #share.busy { opacity: .5; }
 
 /* The canvas is 1080px of intrinsic width, which as a flex item would drag the
@@ -923,7 +927,7 @@ footer {
 
 @media (prefers-reduced-motion: reduce) {
   .now-row, .star.pop, .big.pop, .cell span.pop, .overlay:not([hidden]),
-  .overlay:not([hidden]) .dialog, .panel:not([hidden]), .tbtn.press, #refresh.busy {
+  .overlay:not([hidden]) .dialog, .panel:not([hidden]), .tbtn.press, #refresh.busy svg {
     animation: none !important;
   }
 }
