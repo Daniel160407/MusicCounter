@@ -153,11 +153,28 @@
     return true;
   }
 
+  // Spotify's bars carry a visually hidden range input for keyboard users;
+  // setting it the way React expects is what its own arrow keys do, and works
+  // where synthetic pointer events don't (they fail its pointer capture).
+  function setRange(input, fraction) {
+    const min = Number(input.min) || 0;
+    const max = Number(input.max);
+    if (!Number.isFinite(max) || max <= min) return false;
+    const value = min + (max - min) * Math.max(0, Math.min(1, fraction));
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+    setter.call(input, String(Math.round(value)));
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+    return true;
+  }
+
   function seek(seconds) {
     const { duration } = progressSeconds();
     const bar = document.querySelector('[data-testid="playback-progressbar"]');
     if (!bar || !duration) return false;
-    return clickBarAt(bar, seconds / duration);
+    const input = bar.querySelector('input[type="range"]');
+    if (input && setRange(input, seconds / duration)) return true;
+    return clickBarAt(bar.querySelector('[data-testid="progress-bar"]') || bar, seconds / duration);
   }
 
   const VOLUME_BAR = '[data-testid="volume-bar"]';
@@ -193,9 +210,10 @@
   }
 
   // A song sent from the phone. A search opens the first track; a track page
-  // gets its big Play button pressed once, which Spotify then labels Pause.
+  // gets its big Play button pressed, which Spotify then labels Pause. A press
+  // that didn't take (the tab wasn't shown yet) is tried again a few seconds on.
   let openedResult = false;
-  let pressedPlay = false;
+  let pressedPlayAt = 0;
   function autoplay() {
     if (location.pathname.startsWith('/search/')) {
       const link = document.querySelector('[data-testid="tracklist-row"] a[href^="/track/"]');
@@ -208,8 +226,8 @@
     const button = document.querySelector('[data-testid="action-bar-row"] [data-testid="play-button"]');
     if (!button) return 'wait';
     if (/paus/i.test(button.getAttribute('aria-label') || '')) return 'done';
-    if (!pressedPlay) {
-      pressedPlay = true;
+    if (Date.now() - pressedPlayAt > 5000) {
+      pressedPlayAt = Date.now();
       button.click();
     }
     return 'wait';

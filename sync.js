@@ -7,10 +7,13 @@
 //
 // Every device writes only its own document, so two devices never fight over
 // the same counters; each one shows its own stats merged with everyone else's.
-// Favorites and the history-retention setting are shared by all of them.
+// Favorites, playlists and the history-retention setting are shared by all of them.
 //
-//   users/{uid}                              historyRetention, settingsUpdatedAt, favoritesUpdatedAt
+//   users/{uid}                              historyRetention, settingsUpdatedAt, favoritesUpdatedAt,
+//                                            playlistsUpdatedAt
 //   users/{uid}/favorites/{key}              key, id, title, artist, source, addedAt
+//   users/{uid}/playlists/{id}               id, name, tracks [{ source, id, title, artist }],
+//                                            createdAt, updatedAt
 //   users/{uid}/devices/{deviceId}           platform, name, updatedAt, total, firstSeen, sources, parts
 //   users/{uid}/devices/{deviceId}/parts/{n} json   (tracks, artists, days-YYYY, history-YYYY-MM-N)
 //   users/{uid}/live/{deviceId}, users/{uid}/commands/{deviceId}   now playing and phone remote (live.js)
@@ -71,7 +74,11 @@ async function saveSyncState(patch) {
 
 async function loadPending() {
   const pending = (await chrome.storage.local.get('syncPending')).syncPending || {};
-  return { favorites: pending.favorites || {}, retention: pending.retention || null };
+  return {
+    favorites: pending.favorites || {},
+    playlists: pending.playlists || {},
+    retention: pending.retention || null,
+  };
 }
 
 async function getDeviceId() {
@@ -204,6 +211,10 @@ async function signIn() {
     for (const [key, fav] of Object.entries(favorites)) {
       if (!(key in pending.favorites)) pending.favorites[key] = fav;
     }
+    // Playlists too: their ids are random, so nothing on the account can clash.
+    for (const [id, playlist] of Object.entries(await loadPlaylists())) {
+      if (!(id in pending.playlists)) pending.playlists[id] = playlist;
+    }
     await chrome.storage.local.set({ syncPending: pending });
   });
 
@@ -292,6 +303,18 @@ function fromFields(fields) {
 // would read as a path separator. The real key is kept in the document itself.
 function favoriteDocId(key) {
   return key.replace(/\//g, '_');
+}
+
+// A playlist as stored in Firestore, and as read back from it: only the known
+// fields, every one present, so a version that knows fewer still reads it.
+function sharedPlaylist(playlist) {
+  return {
+    id: String(playlist.id || ''),
+    name: playlistName(playlist.name),
+    tracks: (Array.isArray(playlist.tracks) ? playlist.tracks : []).map(playlistTrack),
+    createdAt: Number(playlist.createdAt) || 0,
+    updatedAt: Number(playlist.updatedAt) || 0,
+  };
 }
 
 // --- Building this device's parts ---------------------------------------------
@@ -413,6 +436,15 @@ async function noteFavoriteChanges(before, after) {
   runSync({ push: false, pull: true });
 }
 
+// A playlist created, edited (the whole playlist is written again) or deleted (null).
+async function notePlaylistChange(id, playlist) {
+  if (!(await loadAuth())) return;
+  const pending = await loadPending();
+  pending.playlists[id] = playlist;
+  await chrome.storage.local.set({ syncPending: pending });
+  runSync({ push: false, pull: true });
+}
+
 async function noteRetentionChange(retention) {
   if (!(await loadAuth())) return;
   const pending = await loadPending();
@@ -424,16 +456,23 @@ async function noteRetentionChange(retention) {
 async function flushPending(auth) {
   const pending = await serialized(loadPending);
   const favorites = Object.entries(pending.favorites);
-  if (favorites.length === 0 && !pending.retention) return;
+  const playlists = Object.entries(pending.playlists);
+  if (favorites.length === 0 && playlists.length === 0 && !pending.retention) return;
 
   const userPath = `${documentsRoot()}/users/${auth.uid}`;
   const now = Date.now();
   const writes = favorites.map(([key, fav]) => (fav
     ? { update: { name: `${userPath}/favorites/${favoriteDocId(key)}`, fields: toFields({ key, ...fav }) } }
     : { delete: `${userPath}/favorites/${favoriteDocId(key)}` }));
+  for (const [id, playlist] of playlists) {
+    writes.push(playlist
+      ? { update: { name: `${userPath}/playlists/${id}`, fields: toFields(sharedPlaylist(playlist)) } }
+      : { delete: `${userPath}/playlists/${id}` });
+  }
 
   const userFields = {};
   if (favorites.length > 0) userFields.favoritesUpdatedAt = now;
+  if (playlists.length > 0) userFields.playlistsUpdatedAt = now;
   if (pending.retention) {
     userFields.historyRetention = pending.retention;
     userFields.settingsUpdatedAt = now;
@@ -450,6 +489,9 @@ async function flushPending(auth) {
     const current = await loadPending();
     for (const [key, fav] of favorites) {
       if (JSON.stringify(current.favorites[key]) === JSON.stringify(fav)) delete current.favorites[key];
+    }
+    for (const [id, playlist] of playlists) {
+      if (JSON.stringify(current.playlists[id]) === JSON.stringify(playlist)) delete current.playlists[id];
     }
     if (current.retention === pending.retention) current.retention = null;
     await chrome.storage.local.set({ syncPending: current });
@@ -490,6 +532,23 @@ async function pullRemote(auth) {
       await chrome.storage.local.set({ favorites: remoteFavorites });
     });
     await saveSyncState({ favoritesPulled: true, favoritesUpdatedAt: user.favoritesUpdatedAt });
+  }
+
+  if (!state.playlistsPulled || user.playlistsUpdatedAt !== state.playlistsUpdatedAt) {
+    const remotePlaylists = {};
+    for (const doc of await listDocuments(`${userPath}/playlists`)) {
+      const playlist = sharedPlaylist(fromFields(doc.fields));
+      if (playlist.id) remotePlaylists[playlist.id] = playlist;
+    }
+    await serialized(async () => {
+      const pending = await loadPending();
+      for (const [id, playlist] of Object.entries(pending.playlists)) {
+        if (playlist) remotePlaylists[id] = playlist;
+        else delete remotePlaylists[id];
+      }
+      await chrome.storage.local.set({ playlists: remotePlaylists });
+    });
+    await saveSyncState({ playlistsPulled: true, playlistsUpdatedAt: user.playlistsUpdatedAt });
   }
 
   if (user.historyRetention && user.settingsUpdatedAt !== state.settingsUpdatedAt) {

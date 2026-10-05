@@ -5,11 +5,13 @@
 //   users/{uid}/live/{deviceId}      platform, name, updatedAt, track
 //                                    track: source, id, title, artist, artwork, paused,
 //                                           volume (0–maxVolume, null when the page can't tell),
-//                                           maxVolume (2 where the page can be boosted past 100%, else 1)
+//                                           maxVolume (2 where the page can be boosted past 100%, else 1),
+//                                           playlist ({ id, name, index, count } while one plays, else null)
 //                                           (null when nothing is loaded)
 //   users/{uid}/commands/{deviceId}  command: { id, action, at }, written by the phone;
 //                                    action 'volume' also carries value (0–2);
-//                                    action 'open' also carries source, trackId, title, artist
+//                                    action 'open' also carries source, trackId, title, artist;
+//                                    action 'playlist' also carries playlistId, index (0-based)
 //
 // The page's player is asked directly, the way the popup does it, every
 // couple of seconds while something is loaded. A write only goes out when the
@@ -33,6 +35,9 @@ const COMMAND_MAX_AGE_MS = 2 * 60 * 1000;
 const CONTROL_ACTIONS = ['prev', 'playPause', 'next'];
 // How long a page opened for the phone has to load and start the song.
 const OPEN_TIMEOUT_MS = 30 * 1000;
+// A song opened without showing its tab gets this long to start there; Chrome
+// may hold back media in a tab that isn't shown, so after that the tab is shown.
+const BACKGROUND_START_MS = 12 * 1000;
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -49,7 +54,7 @@ function liveKey(track) {
   return track ? `${track.source}:${track.id || track.title}` : '';
 }
 
-function liveTrack(playing) {
+function liveTrack(playing, playlist) {
   return {
     source: playing.source,
     id: playing.id || '',
@@ -61,6 +66,10 @@ function liveTrack(playing) {
     // phone could show rather than on every pixel.
     volume: Number.isFinite(playing.volume) ? Math.round(playing.volume * 100) / 100 : null,
     maxVolume: playing.maxVolume || 1,
+    // Only on the tab the playlist is playing in.
+    playlist: playlist && playlist.tabId === playing.tabId
+      ? { id: playlist.id, name: playlist.name, index: playlist.index, count: playlist.count }
+      : null,
   };
 }
 
@@ -69,6 +78,7 @@ function needsPublish(meta, track, now) {
   if (!track || !meta.track) return Boolean(track) !== Boolean(meta.track);
   if (liveKey(track) !== liveKey(meta.track) || track.paused !== meta.track.paused) return true;
   if (track.volume !== (meta.track.volume ?? null)) return true;
+  if (JSON.stringify(track.playlist || null) !== JSON.stringify(meta.track.playlist || null)) return true;
   return !track.paused && now - meta.publishedAt >= LIVE_HEARTBEAT_MS;
 }
 
@@ -87,15 +97,18 @@ async function publishLive(auth, track, now) {
   await chrome.storage.session.set({ liveMeta: { track, publishedAt: now, pausedSince } });
 }
 
-// A song picked on the phone: open it on its service, in that service's tab if
-// there is one, and keep asking the page to start it until it plays. Whatever
-// else was playing is paused so the two don't overlap.
-async function openFromPhone(command) {
+// A song picked on the phone or next in a playlist: open it on its service, in
+// that service's tab if there is one (`preferTabId` first, when it is one), and
+// keep asking the page to start it until it plays. Whatever else was playing is
+// paused so the two don't overlap. With `activate` false (a playlist's songs)
+// the tab is left where it is, unless the song won't start there.
+// Resolves to the tab, or null if it was closed.
+async function openSong(song, { preferTabId = null, activate = true } = {}) {
   let url = trackUrl({
-    source: command.source || 'ios',
-    id: command.trackId || '',
-    title: command.title || '',
-    artist: command.artist || '',
+    source: song.source || 'ios',
+    id: song.id || '',
+    title: song.title || '',
+    artist: song.artist || '',
   });
   // Spotify's track list, where the first row is a track, not an artist or album.
   if (url.startsWith('https://open.spotify.com/search/')) url += '/tracks';
@@ -104,13 +117,14 @@ async function openFromPhone(command) {
   try {
     const tabs = await chrome.tabs.query({ url: SERVICE_TABS[sourceOf(url)] });
     if (tabs.length > 0) {
-      tabId = bestTab(tabs, chrome.windows.WINDOW_ID_NONE).id;
-      await chrome.tabs.update(tabId, { url, active: true });
+      const preferred = tabs.find((tab) => tab.id === preferTabId);
+      tabId = (preferred || bestTab(tabs, chrome.windows.WINDOW_ID_NONE)).id;
+      await chrome.tabs.update(tabId, { url, ...(activate ? { active: true } : {}) });
     }
   } catch (err) {
     tabId = undefined;
   }
-  if (tabId === undefined) tabId = (await chrome.tabs.create({ url, active: true })).id;
+  if (tabId === undefined) tabId = (await chrome.tabs.create({ url, active: activate })).id;
 
   const playing = await queryNowPlaying();
   if (playing && !playing.paused && playing.tabId !== tabId) {
@@ -120,23 +134,37 @@ async function openFromPhone(command) {
   // Give the navigation a moment to start, so the old page isn't the one asked.
   await sleep(1000);
   const deadline = Date.now() + OPEN_TIMEOUT_MS;
+  const showAt = activate ? Infinity : Date.now() + BACKGROUND_START_MS;
   while (Date.now() < deadline) {
     let tab;
     try {
       tab = await chrome.tabs.get(tabId);
     } catch (err) {
-      return; // Closed.
+      return null; // Closed.
+    }
+    if (Date.now() >= showAt && !tab.active) {
+      chrome.tabs.update(tabId, { active: true }).catch(() => {});
     }
     if (tab.status === 'complete') {
       try {
         const reply = await chrome.tabs.sendMessage(tabId, { type: 'autoplay' });
-        if (reply && reply.result === 'done') return;
+        if (reply && reply.result === 'done') return tabId;
       } catch (err) {
         // Content script not injected yet.
       }
     }
     await sleep(1000);
   }
+  return tabId;
+}
+
+function openFromPhone(command) {
+  return openSong({
+    source: command.source || 'ios',
+    id: command.trackId || '',
+    title: command.title || '',
+    artist: command.artist || '',
+  });
 }
 
 // The phone's latest press: a song to open, or a button or volume for the tab being shown to it.
@@ -155,7 +183,19 @@ async function pollCommand(auth) {
     openFromPhone(command).catch(() => {});
     return true;
   }
+  if (command.action === 'playlist') {
+    startPlaylist(String(command.playlistId || ''), Number(command.index) || 0);
+    return true;
+  }
   if (liveTabId === null) return false;
+  // While a playlist plays in that tab, its songs are what previous and next step through.
+  if (command.action === 'prev' || command.action === 'next') {
+    const playlist = await playlistStatus();
+    if (playlist && playlist.tabId === liveTabId) {
+      await stepPlaylist(command.action === 'next' ? 1 : -1);
+      return true;
+    }
+  }
   let message;
   if (command.action === 'volume') {
     const value = Number(command.value);
@@ -207,7 +247,7 @@ async function startLive() {
       const now = Date.now();
       const playing = await queryNowPlaying();
       liveTabId = playing ? playing.tabId : null;
-      const track = playing ? liveTrack(playing) : null;
+      const track = playing ? liveTrack(playing, await playlistStatus()) : null;
 
       // A tab still loading answers nothing; give it a second look before
       // telling the phone the music is gone.

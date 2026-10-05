@@ -159,6 +159,7 @@ h1 {
 }
 @media (prefers-reduced-motion: reduce) {
   .pulse i { animation: none; transform: scaleY(.6); }
+  .chart.intro .stack, .chart.intro .empty, .bars.intro .fill, .bars.intro .row { animation: none; }
 }
 
 .now .star {
@@ -240,6 +241,11 @@ ul { list-style: none; }
 }
 .bars .track { height: 5px; background: #272235; border-radius: 3px; overflow: hidden; }
 .bars .fill { height: 100%; border-radius: 3px; }
+/* Bars fill from the left, one after another, under the same rule as the chart
+   columns: only when what they cover changes. */
+@keyframes barFill { from { width: 0; } }
+.bars.intro .fill { animation: barFill .5s cubic-bezier(.2, .8, .2, 1) backwards; animation-delay: calc(var(--i) * 60ms); }
+.bars.intro .row { animation: panelIn .25s ease backwards; animation-delay: calc(var(--i) * 60ms); }
 .fill.youtube { background: var(--youtube); }
 .fill.ytmusic { background: var(--ytmusic); }
 .fill.spotify { background: var(--spotify); }
@@ -479,46 +485,67 @@ footer {
 .danger { background: #d93a4b; color: #fff; font-weight: 600; }
 .danger:hover { background: #e8495a; }
 
-/* Tabs: one popup, two things to look at. The now-playing row sits above them
-   so it stays on screen whichever tab is open. */
+/* Tabs: one popup, five things to look at. The now-playing row sits above them
+   so it stays on screen whichever tab is open. Like the iPhone app's tab bar,
+   each tab is an icon over a short label, all the same width, so five fit in
+   288px without shrinking the text to nothing. */
 .tabs {
-  display: flex;
-  gap: 4px;
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 2px;
   background: var(--panel);
-  border-radius: 8px;
+  border-radius: 10px;
   padding: 3px;
   margin-bottom: 16px;
 }
 .tab {
-  flex: 1 1 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  min-width: 0;
   background: none;
   border: none;
-  border-radius: 6px;
-  padding: 5px 0;
+  border-radius: 7px;
+  padding: 6px 0 5px;
   font: inherit;
-  font-size: 10.5px;
+  font-size: 10px;
   font-weight: 600;
-  letter-spacing: .02em;
-  text-transform: uppercase;
+  line-height: 1;
   color: var(--muted);
   cursor: pointer;
   transition: background .15s ease, color .15s ease;
   position: relative;
 }
+.tab svg {
+  width: 16px;
+  height: 16px;
+  fill: currentColor;
+  transition: transform .15s ease;
+}
+.tab span:not(.tab-dot) {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 /* Something new was earned and hasn't been looked at yet. */
 .tab-dot {
   position: absolute;
-  top: 3px;
-  right: 5px;
+  top: 4px;
+  right: calc(50% - 13px);
   width: 6px;
   height: 6px;
   border-radius: 50%;
   background: var(--accent);
+  box-shadow: 0 0 0 2px var(--panel);
 }
 .tab-dot[hidden] { display: none; }
 .tab:hover { color: var(--text); }
-.tab.on { background: #2b2540; color: var(--text); }
-.tab:focus-visible { outline: 1px solid var(--accent); }
+.tab:active svg { transform: scale(.9); }
+.tab.on { background: #2b2540; color: var(--accent); }
+.tab.on span { color: var(--text); }
+.tab:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
 
 .panel[hidden] { display: none; }
 /* Panels only toggle `hidden` on a tab click, never on the poll, so the fade
@@ -550,6 +577,9 @@ footer {
 .day-nav-btn:hover:not(:disabled) { background: #2b2540; color: var(--accent); }
 .day-nav-btn:focus-visible { outline: 1px solid var(--accent); }
 .day-nav-btn:disabled { opacity: .3; cursor: default; }
+/* Its own row under the head: next to the Day / All time toggle it would not fit. */
+.hours-day-nav { justify-content: center; margin-bottom: 8px; }
+.hours-day-nav[hidden] { display: none; }
 .day-nav-label {
   min-width: 64px;
   text-align: center;
@@ -558,7 +588,7 @@ footer {
 }
 
 .range, .sort { display: flex; gap: 2px; }
-.range-option, .sort-option {
+.range-option, .sort-option, .scope-option {
   background: none;
   border: none;
   border-radius: 5px;
@@ -570,9 +600,9 @@ footer {
   cursor: pointer;
   transition: background .15s ease, color .15s ease;
 }
-.range-option:hover, .sort-option:hover { color: var(--text); }
-.range-option.on, .sort-option.on { background: #2b2540; color: var(--accent); }
-.range-option:focus-visible, .sort-option:focus-visible { outline: 1px solid var(--accent); }
+.range-option:hover, .sort-option:hover, .scope-option:hover { color: var(--text); }
+.range-option.on, .sort-option.on, .scope-option.on { background: #2b2540; color: var(--accent); }
+.range-option:focus-visible, .sort-option:focus-visible, .scope-option:focus-visible { outline: 1px solid var(--accent); }
 
 /* Columns are scaled against the tallest one, so the shape of the week reads at
    a glance even when the whole week was quiet. */
@@ -605,6 +635,15 @@ footer {
 }
 /* Nothing played is simply the axis: a separate mark for it broke the line. */
 .chart .stack.zero { height: 0; min-height: 0; }
+
+/* Columns rise off the axis, left to right, when the chart's range, period or
+   day changes (see paint() in popup.js — never on the poll). A clip rather than
+   a scale, so the shares written on the bars aren't squashed on the way up;
+   `backwards` only, so the clip is gone afterwards and can't cut off the
+   highlight ring round today. */
+@keyframes columnRise { from { clip-path: inset(100% 0 0 0); } to { clip-path: inset(0 0 0 0); } }
+.chart.intro .stack { animation: columnRise .42s cubic-bezier(.2, .8, .2, 1) backwards; animation-delay: calc(var(--i) * 14ms); }
+.chart.intro .empty { animation: panelIn .2s ease; }
 
 .chart .stack i {
   display: flex;
@@ -641,6 +680,85 @@ footer {
   color: var(--muted);
   font-size: 9px;
   line-height: 1;
+}
+
+/* The chart tooltip (see showChartTip in popup.js): one card for every chart,
+   placed by script above the column under the pointer. */
+.chart-tip {
+  position: fixed;
+  z-index: 20;
+  min-width: 150px;
+  max-width: 220px;
+  padding: 8px 10px 9px;
+  background: rgba(30, 26, 44, .96);
+  border: 1px solid #3d3358;
+  border-radius: 9px;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, .45), 0 1px 0 rgba(255, 255, 255, .04) inset;
+  backdrop-filter: blur(8px);
+  color: var(--text);
+  font-size: 11px;
+  pointer-events: none;
+  opacity: 0;
+  transform: translateY(3px);
+  transition: opacity .12s ease, transform .12s ease;
+}
+.chart-tip.below { transform: translateY(-3px); }
+.chart-tip.on { opacity: 1; transform: translateY(0); }
+/* The little pointer down to the column (or up to it, flipped below). */
+.chart-tip::after {
+  content: '';
+  position: absolute;
+  left: var(--arrow-x, 50%);
+  bottom: -5px;
+  width: 8px;
+  height: 8px;
+  background: inherit;
+  border: solid #3d3358;
+  border-width: 0 1px 1px 0;
+  transform: translateX(-50%) rotate(45deg);
+}
+.chart-tip.below::after { bottom: auto; top: -5px; border-width: 1px 0 0 1px; }
+
+.chart-tip .tip-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+.chart-tip .tip-head span { color: var(--muted); font-size: 10px; letter-spacing: .02em; }
+.chart-tip .tip-head strong { font-size: 14px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.chart-tip .tip-head .tip-quiet { color: var(--muted); font-size: 11px; letter-spacing: 0; }
+
+.chart-tip .tip-split {
+  display: flex;
+  gap: 2px;
+  height: 4px;
+  margin: 7px 0 6px;
+  border-radius: 2px;
+  overflow: hidden;
+}
+.chart-tip .tip-split i { min-width: 2px; }
+
+.chart-tip .tip-rows { list-style: none; margin: 0; padding: 0; }
+.chart-tip .tip-rows li {
+  display: grid;
+  grid-template-columns: 8px 1fr auto 30px;
+  align-items: center;
+  gap: 6px;
+  line-height: 1.6;
+}
+.chart-tip .tip-rows .dot { width: 7px; height: 7px; border-radius: 50%; }
+.chart-tip .tip-rows span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.chart-tip .tip-rows em { font-style: normal; color: var(--muted); font-variant-numeric: tabular-nums; }
+.chart-tip .tip-rows b { text-align: right; font-weight: 600; font-variant-numeric: tabular-nums; }
+
+.chart-tip .youtube { background: var(--youtube); }
+.chart-tip .ytmusic { background: var(--ytmusic); }
+.chart-tip .spotify { background: var(--spotify); }
+.chart-tip .ios { background: var(--ios); }
+
+@media (prefers-reduced-motion: reduce) {
+  .chart-tip, .chart-tip.below { transition: none; transform: none; }
 }
 
 .chart-note {
@@ -902,3 +1020,152 @@ body.loading :is(.bars, .list, .chart, #awards)::before {
   animation: skeletonPulse 1.2s ease-in-out infinite;
 }
 body.loading .chart-note { visibility: hidden; }
+
+/* Playlists */
+.now .add, .list .add {
+  flex: 0 0 auto;
+  background: none;
+  border: none;
+  padding: 0 2px;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1;
+  color: #3a3350;
+  cursor: pointer;
+  transition: color .15s ease;
+}
+.list .add { font-size: 14px; }
+.now .add:hover, .list .add:hover { color: var(--accent); }
+.now .add:focus-visible, .list .add:focus-visible { outline: 1px solid var(--accent); border-radius: 3px; }
+
+.pl-form { display: flex; gap: 6px; margin-bottom: 10px; }
+.pl-form input, .pl-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  background: #1c1830;
+  color: var(--text);
+  border: 1px solid #4a4363;
+  border-radius: 6px;
+  padding: 5px 9px;
+  font: inherit;
+  font-size: 12px;
+}
+.pl-form input::placeholder { color: var(--muted); }
+.pl-form input:focus-visible, .pl-name:focus-visible { outline: 1px solid var(--accent); }
+.pl-form button, .pl-detail-head .ghost {
+  flex: 0 0 auto;
+  border: 1px solid #4a4363;
+  border-radius: 6px;
+  padding: 4px 9px;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  transition: color .15s ease, transform .1s ease;
+}
+.pl-form button:active, .pl-detail-head .ghost:active { transform: scale(.95); }
+.pl-form button:disabled { opacity: .4; cursor: default; }
+.pl-note { margin: -4px 0 8px; min-height: 0; }
+.pl-note:empty { display: none; }
+.pl-note.error { color: #ff8a95; }
+
+.pl-detail-head { display: flex; align-items: center; gap: 6px; margin-bottom: 10px; }
+.pl-detail-head .day-nav-btn { flex: 0 0 auto; }
+.pl-name { font-weight: 600; background: transparent; border-color: transparent; padding: 4px 6px; }
+.pl-name:hover { border-color: #332e45; }
+.pl-name:focus { background: #1c1830; border-color: #4a4363; }
+#pl-play { color: var(--accent); border-color: #3d3358; }
+#pl-play:disabled { opacity: .4; cursor: default; }
+.pl-delete.confirming { background: #d93a4b; border-color: #d93a4b; color: #fff; }
+
+.pl-list .count { color: var(--muted); }
+.pl-dots { display: inline-flex; gap: 3px; margin-left: 6px; vertical-align: 1px; }
+.pl-dots i { width: 6px; height: 6px; border-radius: 50%; }
+.pl-dots i.youtube { background: var(--youtube); }
+.pl-dots i.ytmusic { background: var(--ytmusic); }
+.pl-dots i.spotify { background: var(--spotify); }
+.pl-dots i.ios { background: var(--ios); }
+.pl-list .list-play, .pl-tracks .row-btn {
+  flex: 0 0 auto;
+  background: none;
+  border: none;
+  border-radius: 4px;
+  width: 20px;
+  height: 20px;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+  transition: color .15s ease, background .15s ease;
+}
+.pl-list .list-play svg { width: 11px; height: 11px; fill: currentColor; display: block; margin: auto; }
+.pl-list .list-play:hover, .pl-tracks .row-btn:hover:not(:disabled) { color: var(--text); background: #2b2540; }
+.pl-tracks .row-btn:disabled { opacity: .25; cursor: default; }
+.pl-list .list-play:focus-visible, .pl-tracks .row-btn:focus-visible { outline: 1px solid var(--accent); }
+.pl-tracks .pos {
+  flex: 0 0 auto;
+  width: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  color: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  cursor: grab;
+  border-radius: 3px;
+}
+.pl-tracks .pos:focus-visible { outline: 1px solid var(--accent); }
+/* The number turns into a grip under the pointer, saying the row can be moved. */
+.pl-tracks .grip { display: none; width: 8px; height: 13px; fill: currentColor; }
+.pl-tracks li:hover .pos-num, .pl-tracks .pos:focus-visible .pos-num { display: none; }
+.pl-tracks li:hover .grip, .pl-tracks .pos:focus-visible .grip { display: block; }
+.pl-tracks li:hover .pos { color: var(--text); }
+/* Removing is a hover action, so titles get the width the rest of the time. */
+.pl-tracks .remove { opacity: 0; transition: opacity .15s ease, color .15s ease, background .15s ease; }
+.pl-tracks li:hover .remove, .pl-tracks .remove:focus-visible { opacity: 1; }
+.pl-tracks li { position: relative; touch-action: none; user-select: none; }
+#pl-tracks { position: relative; }
+.pl-tracks.sorting li { transition: transform .16s ease; }
+.pl-tracks.sorting, .pl-tracks.sorting li { cursor: grabbing; }
+.pl-tracks li.dragging {
+  transition: none;
+  z-index: 1;
+  background: #2b2540;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, .45);
+}
+.pl-tracks.sorting li.dragging .name { color: var(--text); }
+.pl-tracks.sorting li:not(.dragging):hover { background: none; }
+.pl-tracks.sorting li:not(.dragging):hover .name { color: var(--text); }
+.pl-tracks.sorting li:not(.dragging) .remove { opacity: 0; }
+@media (prefers-reduced-motion: reduce) {
+  .pl-tracks.sorting li { transition: none; }
+}
+.pl-tracks li.current .name { color: var(--accent); }
+.pl-tracks li.current .pos { color: var(--accent); }
+#pl-list, #pl-tracks, #add-list {
+  max-height: 260px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 0 6px;
+  margin: 0 -6px;
+}
+#add-list { max-height: 180px; margin-bottom: 10px; }
+#pl-list::-webkit-scrollbar, #pl-tracks::-webkit-scrollbar, #add-list::-webkit-scrollbar { width: 6px; }
+
+.pl-playing {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--panel);
+  border-radius: 8px;
+  padding: 7px 8px 7px 10px;
+  margin-bottom: 14px;
+}
+.pl-playing[hidden] { display: none; }
+.pl-playing-text { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pl-playing-text small { display: block; color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .05em; }
+.pl-playing + div section { margin-top: 0; }
+
+.add-dialog { width: 100%; }
+.dialog .add-song { margin-bottom: 10px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dialog .add-song small { color: var(--muted); font-size: 11px; }
+.dialog .pl-note { margin: -4px 0 10px; }

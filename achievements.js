@@ -204,3 +204,156 @@ function evaluateAchievements(stats, favorites, unlocked = {}) {
     return { ...a, value: Math.min(value, a.goal), unlockedAt };
   });
 }
+
+// When each badge was really earned, replayed from the hour-by-hour listening,
+// the play history and the favourites. Badges can be earned from listening that
+// happened before they existed, or that arrives late from another device, so
+// the moment the worker notices isn't always the moment it was earned. An
+// hour's listening is taken as spread evenly across it, which places a time to
+// within the hour. Per-artist time has no timeline, so Superfan and Ultimate
+// Fan can't be dated. Returns id -> ms for every badge the data shows reached.
+function replayUnlockTimes(stats, history, favorites) {
+  const byMetric = {};
+  for (const a of ACHIEVEMENTS) (byMetric[a.metric] = byMetric[a.metric] || []).push(a);
+  const found = {};
+  const reach = (metric, value, at) => {
+    for (const a of byMetric[metric] || []) {
+      if (!found[a.id] && value >= a.goal && at <= Date.now()) found[a.id] = at;
+    }
+  };
+
+  const slices = [];
+  for (const [key, day] of Object.entries(stats.days || {})) {
+    for (const [hour, slice] of Object.entries(day.hours || {})) {
+      const h = Number(hour);
+      if (!(h >= 0 && h < 24) || !((slice.total || 0) > 0)) continue;
+      const start = parseDayKey(key);
+      start.setHours(h);
+      slices.push({ key, h, start: start.getTime(), slice });
+    }
+  }
+  slices.sort((a, b) => a.start - b.start);
+
+  const extendRun = (run, key) => {
+    const date = parseDayKey(key);
+    const step = run.last ? daysBetween(run.last, date) : 0;
+    run.length = run.last && step === 1 ? run.length + 1 : 1;
+    run.longest = Math.max(run.longest, run.length);
+    if (run.last) run.gap = Math.max(run.gap, step - 1);
+    run.count += 1;
+    if (!run.first) run.first = date;
+    run.last = date;
+  };
+
+  const STEPS = 60;
+  let total = 0;
+  const dayTotals = {};
+  const weekendTotals = {};
+  const dayParts = {};
+  const hourTotals = new Array(24).fill(0);
+  const sources = {};
+  const active = { last: null, first: null, length: 0, longest: 0, gap: 0, count: 0 };
+  const habit = { last: null, first: null, length: 0, longest: 0, gap: 0, count: 0 };
+
+  for (const { key, h, start, slice } of slices) {
+    const date = parseDayKey(key);
+    const weekday = date.getDay();
+    // A Sunday adds to its Saturday's weekend.
+    const weekend = weekday === 6 ? key
+      : weekday === 0 ? dayKeyOf(new Date(date.getFullYear(), date.getMonth(), date.getDate() - 1)) : null;
+    const shares = {};
+    let attributed = 0;
+    for (const [source, seconds] of Object.entries(slice)) {
+      if (source === 'total' || !(seconds > 0)) continue;
+      shares[source] = seconds / slice.total;
+      attributed += seconds;
+    }
+    if (attributed < slice.total) shares.other = (slice.total - attributed) / slice.total;
+
+    const step = slice.total / STEPS;
+    let hourSeconds = 0;
+    for (let i = 1; i <= STEPS; i++) {
+      const at = Math.round(start + (i * 3600000) / STEPS);
+
+      total += step;
+      reach('totalSeconds', total, at);
+
+      const before = dayTotals[key] || 0;
+      const today = before + step;
+      dayTotals[key] = today;
+      reach('bestDaySeconds', today, at);
+      if (before < ACTIVE_DAY_SECONDS && today >= ACTIVE_DAY_SECONDS) {
+        extendRun(active, key);
+        reach('longestStreak', active.longest, at);
+        reach('activeDays', active.count, at);
+        reach('longestGap', active.gap, at);
+      }
+      if (before < HABIT_DAY_SECONDS && today >= HABIT_DAY_SECONDS) {
+        extendRun(habit, key);
+        reach('longestHabit', habit.longest, at);
+      }
+
+      if (weekend) {
+        weekendTotals[weekend] = (weekendTotals[weekend] || 0) + step;
+        reach('bestWeekendSeconds', weekendTotals[weekend], at);
+      }
+
+      hourSeconds += step;
+      if (hourSeconds >= SESSION_HOUR_SECONDS) {
+        if (h < 4) reach('nightOwl', 1, at);
+        if (h >= 5 && h < 7) reach('earlyBird', 1, at);
+      }
+
+      const parts = dayParts[key] || (dayParts[key] = [0, 0, 0, 0]);
+      parts[Math.floor(h / 6)] += step;
+      if (parts.every((p) => p >= DAY_PART_SECONDS)) reach('dawnToDusk', 1, at);
+
+      hourTotals[h] += step;
+      reach('hoursCovered', hourTotals.filter((s) => s >= ACTIVE_DAY_SECONDS).length, at);
+
+      for (const [source, share] of Object.entries(shares)) sources[source] = (sources[source] || 0) + step * share;
+      reach('serviceCount', Object.entries(sources)
+        .filter(([source, s]) => source !== 'other' && s >= ACTIVE_DAY_SECONDS).length, at);
+    }
+  }
+
+  if (active.first) {
+    for (const a of byMetric.daysSinceFirst) {
+      const when = new Date(active.first.getFullYear(), active.first.getMonth(), active.first.getDate() + a.goal);
+      if (!found[a.id] && when.getTime() <= Date.now()) found[a.id] = when.getTime();
+    }
+  }
+
+  // History logs a play a little before it counts (a fifth of the track, not
+  // half), so when it has more rows than there are plays, the nth play is taken
+  // as the matching share of the way through it. A shorter history lost its
+  // oldest rows to retention.
+  const plays = (history || []).filter((e) => e && e.at > 0).sort((a, b) => a.at - b.at);
+  const totalPlays = Object.values(stats.tracks || {}).reduce((sum, t) => sum + (t.plays || 0), 0);
+  for (const a of byMetric.totalPlays) {
+    if (totalPlays < a.goal || !plays.length) continue;
+    const index = plays.length >= totalPlays
+      ? Math.ceil((a.goal * plays.length) / totalPlays) - 1
+      : a.goal - 1 - (totalPlays - plays.length);
+    if (index >= 0 && plays[index]) found[a.id] = plays[index].at;
+  }
+  const trackPlays = {};
+  const artists = new Set();
+  for (const e of plays) {
+    const key = `${e.source || 'youtube'}:${e.id || e.title}`;
+    trackPlays[key] = (trackPlays[key] || 0) + 1;
+    reach('topTrackPlays', trackPlays[key], e.at);
+    reach('trackCount', Object.keys(trackPlays).length, e.at);
+    const artist = (e.artist || '').trim();
+    if (artist) artists.add(artist);
+    reach('artistCount', artists.size, e.at);
+  }
+
+  Object.values(favorites || {})
+    .map((f) => f.addedAt)
+    .filter((t) => t > 0)
+    .sort((a, b) => a - b)
+    .forEach((at, i) => reach('favoriteCount', i + 1, at));
+
+  return found;
+}

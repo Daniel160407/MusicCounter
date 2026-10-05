@@ -30,6 +30,7 @@
           <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M10 3h2v10h-2zM2 3l7.5 5L2 13z"/></svg>
         </button>
       </span>
+      <button id="now-add" class="add" title="Add to a playlist" aria-label="Add to a playlist">+</button>
       <button id="now-star" class="star" aria-pressed="false" title="Add to favorites">★</button>
       <div id="now-seek" class="seek" role="slider" aria-label="Seek" aria-valuemin="0" aria-valuemax="0" aria-valuenow="0" hidden>
         <span class="seek-fill" id="now-seek-fill"></span>
@@ -38,11 +39,27 @@
     </div>
   </section>
 
-  <nav class="tabs" role="tablist">
-    <button id="tab-overview" class="tab on" role="tab" aria-selected="true" aria-controls="panel-overview">Overview</button>
-    <button id="tab-analytics" class="tab" role="tab" aria-selected="false" aria-controls="panel-analytics">Analytics</button>
-    <button id="tab-history" class="tab" role="tab" aria-selected="false" aria-controls="panel-history">History</button>
-    <button id="tab-awards" class="tab" role="tab" aria-selected="false" aria-controls="panel-awards" title="Achievements">Awards<span id="awards-dot" class="tab-dot" hidden></span></button>
+  <nav class="tabs" role="tablist" aria-label="Sections">
+    <button id="tab-overview" class="tab on" role="tab" aria-selected="true" aria-controls="panel-overview" tabindex="0">
+      <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2 2 7v7h4v-4h4v4h4V7z"/></svg>
+      <span>Overview</span>
+    </button>
+    <button id="tab-analytics" class="tab" role="tab" aria-selected="false" aria-controls="panel-analytics" tabindex="-1">
+      <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 14h12v1H2zM3 8h2.5v5H3zm3.75-5h2.5v10h-2.5zM10.5 6H13v7h-2.5z"/></svg>
+      <span>Analytics</span>
+    </button>
+    <button id="tab-history" class="tab" role="tab" aria-selected="false" aria-controls="panel-history" tabindex="-1">
+      <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.5a6.5 6.5 0 1 1 0 13 6.5 6.5 0 0 1 0-13zm0 1.5a5 5 0 1 0 0 10A5 5 0 0 0 8 3zm-.75 1.5h1.5v3.2l2.3 1.4-.75 1.3-3.05-1.85z"/></svg>
+      <span>History</span>
+    </button>
+    <button id="tab-awards" class="tab" role="tab" aria-selected="false" aria-controls="panel-awards" tabindex="-1" title="Achievements">
+      <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 1.5h8V3h2.5v1.5A3.5 3.5 0 0 1 11.6 8 4 4 0 0 1 8.75 10.4V12H11v2.5H5V12h2.25v-1.6A4 4 0 0 1 4.4 8 3.5 3.5 0 0 1 1.5 4.5V3H4zM3 4.5a2 2 0 0 0 1 1.7V4.5zm10 0h-1v1.7a2 2 0 0 0 1-1.7z"/></svg>
+      <span>Awards</span><span id="awards-dot" class="tab-dot" hidden></span>
+    </button>
+    <button id="tab-playlists" class="tab" role="tab" aria-selected="false" aria-controls="panel-playlists" tabindex="-1">
+      <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M1.5 3h9v1.5h-9zm0 3.5h9V8h-9zm0 3.5h5.5v1.5H1.5zM12 2h2.5v1.5H13.5V12a2 2 0 1 1-1.5-1.94z"/></svg>
+      <span>Playlists</span>
+    </button>
   </nav>
 
   <div id="panel-overview" class="panel" role="tabpanel" aria-labelledby="tab-overview">
@@ -89,23 +106,37 @@
       <div class="chart-head">
         <h2>Days you listened</h2>
         <div class="range" role="group" aria-label="Range">
-          <button class="range-option on" data-days="7" title="This week, Monday to Sunday" aria-pressed="true">Week</button>
+          <button class="range-option on" data-days="7" title="A calendar week, Monday to Sunday" aria-pressed="true">Week</button>
           <button class="range-option" data-days="14">14d</button>
           <button class="range-option" data-days="30">30d</button>
         </div>
+      </div>
+      <div class="day-nav hours-day-nav" role="group" aria-label="Period">
+        <button id="days-prev-period" class="day-nav-btn" aria-label="Previous period">‹</button>
+        <span id="days-period-label" class="day-nav-label">This week</span>
+        <button id="days-next-period" class="day-nav-btn" aria-label="Next period" disabled>›</button>
       </div>
       <div id="chart-days" class="chart"></div>
       <p id="days-note" class="chart-note"></p>
     </section>
 
     <section>
+      <h2 class="service-head">By service</h2>
+      <ul id="period-sources" class="bars"></ul>
+    </section>
+
+    <section>
       <div class="chart-head">
         <h2>Hours of the day</h2>
-        <div class="day-nav" role="group" aria-label="Day">
-          <button id="hours-prev-day" class="day-nav-btn" aria-label="Previous day">‹</button>
-          <span id="hours-day-label" class="day-nav-label">Today</span>
-          <button id="hours-next-day" class="day-nav-btn" aria-label="Next day" disabled>›</button>
+        <div class="range" role="group" aria-label="Scope">
+          <button class="scope-option on" data-scope="day" aria-pressed="true">Day</button>
+          <button class="scope-option" data-scope="all" title="Every recorded day added together" aria-pressed="false">All time</button>
         </div>
+      </div>
+      <div id="hours-day-nav" class="day-nav hours-day-nav" role="group" aria-label="Day">
+        <button id="hours-prev-day" class="day-nav-btn" aria-label="Previous day">‹</button>
+        <span id="hours-day-label" class="day-nav-label">Today</span>
+        <button id="hours-next-day" class="day-nav-btn" aria-label="Next day" disabled>›</button>
       </div>
       <div id="chart-hours" class="chart"></div>
       <p id="hours-note" class="chart-note"></p>
@@ -152,6 +183,53 @@
     <div id="awards"></div>
   </div>
 
+  <div id="panel-playlists" class="panel" role="tabpanel" aria-labelledby="tab-playlists" hidden>
+    <section id="pl-playing" class="pl-playing" hidden>
+      <span class="pl-playing-text"><small>Playing playlist</small><span id="pl-playing-name"></span></span>
+      <span class="transport">
+        <button id="pl-prev" class="tbtn" title="Previous song in the playlist" aria-label="Previous song in the playlist">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 3h2v10H4zm10 0v10L6.5 8z"/></svg>
+        </button>
+        <button id="pl-stop" class="tbtn" title="Stop the playlist" aria-label="Stop the playlist">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4h8v8H4z"/></svg>
+        </button>
+        <button id="pl-next" class="tbtn" title="Next song in the playlist" aria-label="Next song in the playlist">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M10 3h2v10h-2zM2 3l7.5 5L2 13z"/></svg>
+        </button>
+      </span>
+    </section>
+
+    <div id="pl-index">
+      <section>
+        <h2>Playlists</h2>
+        <form id="pl-create" class="pl-form">
+          <input id="pl-create-name" type="text" maxlength="80" placeholder="New playlist name" aria-label="New playlist name">
+          <button type="submit" class="ghost">Create</button>
+        </form>
+        <ul id="pl-list" class="list pl-list"></ul>
+        <p class="chart-note">Mix YouTube, YouTube Music and Spotify songs: each one opens in its own service's tab, and the next starts when it finishes. Add songs with the + on any song, or paste a link.</p>
+      </section>
+    </div>
+
+    <div id="pl-detail" hidden>
+      <section>
+        <div class="pl-detail-head">
+          <button id="pl-back" class="day-nav-btn" title="All playlists" aria-label="All playlists">‹</button>
+          <input id="pl-name" class="pl-name" type="text" maxlength="80" aria-label="Playlist name" title="Rename the playlist">
+          <button id="pl-play" class="ghost" title="Play from the first song">Play</button>
+          <button id="pl-delete" class="ghost pl-delete" title="Delete this playlist">Delete</button>
+        </div>
+        <form id="pl-link" class="pl-form">
+          <input id="pl-link-url" type="url" placeholder="Paste a YouTube or Spotify song link" aria-label="Song link">
+          <button type="submit" class="ghost">Add</button>
+        </form>
+        <p id="pl-link-note" class="chart-note pl-note"></p>
+        <ul id="pl-tracks" class="list pl-tracks"></ul>
+        <p id="pl-detail-note" class="chart-note"></p>
+      </section>
+    </div>
+  </div>
+
   <section id="sync" class="sync" hidden>
     <span id="sync-status" class="sync-status"></span>
     <button id="sync-action" class="ghost"></button>
@@ -166,6 +244,22 @@
       <div class="dialog-actions">
         <button id="confirm-cancel" class="ghost">Cancel</button>
         <button id="confirm-erase" class="danger">Erase</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="add-overlay" class="overlay" hidden>
+    <div class="dialog add-dialog" role="dialog" aria-labelledby="add-title" aria-modal="true">
+      <h3 id="add-title">Add to a playlist</h3>
+      <p id="add-song" class="add-song"></p>
+      <ul id="add-list" class="list add-list"></ul>
+      <form id="add-create" class="pl-form">
+        <input id="add-create-name" type="text" maxlength="80" placeholder="New playlist name" aria-label="New playlist name">
+        <button type="submit" class="ghost">Create</button>
+      </form>
+      <p id="add-note" class="chart-note pl-note"></p>
+      <div class="dialog-actions">
+        <button id="add-close" class="ghost">Close</button>
       </div>
     </div>
   </div>

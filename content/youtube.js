@@ -68,11 +68,13 @@
     ) || document.title.replace(/ - YouTube$/, '');
   }
 
-  function current(media) {
+  // `anyVideo` skips the music test: a playlist's song is followed to its end
+  // whether or not it counts.
+  function current(media, { anyVideo = false } = {}) {
     const id = videoIdFromUrl();
     if (!id) return null;
     if (!media) return null;
-    if (!isMusicVideo(id)) return null;
+    if (!anyVideo && !isMusicVideo(id)) return null;
 
     return {
       source: 'youtube',
@@ -83,6 +85,8 @@
       title: currentTitle(),
       artist: channelName().replace(/ - Topic$/, ''),
       paused: media.paused,
+      ended: media.ended,
+      ad: document.querySelector('.html5-video-player.ad-showing') !== null,
       volume: MC.mediaVolume(media),
     };
   }
@@ -144,6 +148,12 @@
   MC.startTracker(
     // Ignore muted previews and the inline miniplayer's silent autoplay.
     () => current(MC.findPlayingMedia()),
-    { snapshot: () => current(MC.findMedia()), control, autoplay, maxVolume: MC.MAX_VOLUME },
+    {
+      snapshot: () => current(MC.findMedia()),
+      follow: () => current(MC.findMedia(), { anyVideo: true }),
+      control,
+      autoplay,
+      maxVolume: MC.MAX_VOLUME,
+    },
   );
 })();

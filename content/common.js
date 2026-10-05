@@ -117,6 +117,12 @@
   //   autoplay() — after the worker opened a song for the phone: start it, or on
   //                a search page open the first result. 'done' once it plays,
   //                'wait' to be asked again a second later.
+  //
+  //   follow() — like snapshot(), for the playlist watch: a site that only counts
+  //                some of what it plays (YouTube's music category) still has to
+  //                say when a playlist's song is over.
+  // A snapshot may also carry `ended` (the media element finished) and `ad`
+  // (an advert is playing in the song's place), which the playlist watch uses.
   function startTracker(probe, hooks = {}) {
     let lastActiveAt = null;
     let lastKey = null;
@@ -205,6 +211,119 @@
       }
     }
 
+    // --- Playlists ---------------------------------------------------------
+    //
+    // The worker opened this page's song as part of a playlist and asks to hear
+    // when it is over. Finished means the player stopped at its end, or moved on
+    // by itself from within a few seconds of it (YouTube Music and Spotify go
+    // straight to their own next song). Moving on from anywhere else — a skip,
+    // another video clicked — means you've left the playlist, and is reported
+    // as that instead.
+    const WATCH_MS = 1000;
+    const END_SLACK_S = 5;
+    // After the end, the site's own autoplay is held off for this long, so it
+    // doesn't play over the next song when that one is in another tab.
+    const HOLD_MS = 20000;
+    let watch = null;
+    let hold = null;
+
+    function look() {
+      try {
+        return (hooks.follow || hooks.snapshot || probe)();
+      } catch (err) {
+        return null;
+      }
+    }
+
+    function snapshotKey(state) {
+      return state.source + ':' + (state.id || state.title);
+    }
+
+    function nearEnd(position = watch.position) {
+      return watch.duration > 0 && position !== null && position >= watch.duration - END_SLACK_S;
+    }
+
+    function stopWatching() {
+      if (!watch) return;
+      clearInterval(watch.timer);
+      watch = null;
+    }
+
+    function stopHolding() {
+      if (!hold) return;
+      clearInterval(hold.timer);
+      hold = null;
+    }
+
+    function report(type) {
+      const { token, key } = watch;
+      stopWatching();
+      chrome.runtime.sendMessage({ type, token }).catch(() => {});
+      if (type === 'playlistEnded') holdAutoplay(key);
+    }
+
+    function holdAutoplay(endedKey) {
+      stopHolding();
+      const until = Date.now() + HOLD_MS;
+      const check = () => {
+        if (Date.now() > until) return stopHolding();
+        // YouTube's "Up next" countdown.
+        const cancel = document.querySelector('.ytp-autonav-endscreen-upnext-cancel-button');
+        if (cancel && cancel.offsetParent !== null) cancel.click();
+        const state = look();
+        // Play/pause toggles, so a page slow to show the pause isn't pressed again at once.
+        if (Date.now() - hold.pressedAt < 3000) return;
+        if (state && !state.paused && snapshotKey(state) !== endedKey && hooks.control) {
+          hold.pressedAt = Date.now();
+          hooks.control('playPause');
+        }
+      };
+      hold = { timer: setInterval(check, WATCH_MS), pressedAt: 0 };
+      check();
+    }
+
+    function watchCheck() {
+      const state = look();
+      if (state && state.ad) return;
+      // The song hadn't loaded when the watch began; it's whatever loads first.
+      if (state && watch.key === null) watch.key = snapshotKey(state);
+      if (!state && watch.key === null) return;
+      if (state && snapshotKey(state) === watch.key) {
+        watch.misses = 0;
+        if (state.ended) return report('playlistEnded');
+        const last = watch.position;
+        const position = Number.isFinite(Number(state.position)) ? Number(state.position) : null;
+        const duration = Number(state.duration);
+        if (position !== null) watch.position = position;
+        if (Number.isFinite(duration) && duration > 0) watch.duration = duration;
+        // Stopped at the very end: YouTube's finished video, or Spotify run out
+        // of things to play (it rewinds to the start, so the last position is
+        // what tells). A pause anywhere else is just a pause, and a position
+        // still moving means the paused flag was misread.
+        if (state.paused && nearEnd(last) && (position === null || position <= last)) report('playlistEnded');
+        return;
+      }
+      if (nearEnd()) return report('playlistEnded');
+      // Asked twice, so a player catching its breath between songs isn't
+      // taken for one that moved on.
+      watch.misses += 1;
+      if (watch.misses >= 2) report('playlistLeft');
+    }
+
+    function startWatching(token) {
+      stopWatching();
+      stopHolding();
+      const state = look();
+      watch = {
+        token,
+        key: state ? snapshotKey(state) : null,
+        position: null,
+        duration: 0,
+        misses: 0,
+        timer: setInterval(watchCheck, WATCH_MS),
+      };
+    }
+
     // The popup asks the page directly instead of trusting the last tick: a
     // background tab's timers are throttled to roughly once a minute, so the
     // ticks alone cannot tell "still playing" from "stopped a minute ago".
@@ -248,6 +367,19 @@
           result = 'wait';
         }
         sendResponse({ result });
+        return false;
+      }
+
+      if (msg.type === 'playlistWatch') {
+        startWatching(msg.token);
+        sendResponse({ ok: true });
+        return false;
+      }
+
+      if (msg.type === 'playlistUnwatch') {
+        stopWatching();
+        stopHolding();
+        sendResponse({ ok: true });
         return false;
       }
 

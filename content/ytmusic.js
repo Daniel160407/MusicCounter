@@ -29,6 +29,8 @@
       title,
       artist,
       paused: media.paused,
+      ended: media.ended,
+      ad: document.querySelector('.html5-video-player.ad-showing') !== null,
       volume: MC.mediaVolume(media),
     };
   }

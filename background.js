@@ -1,6 +1,6 @@
 // Aggregates listening ticks from the content scripts into chrome.storage.local.
 
-importScripts('firebase-config.js', 'sync.js', 'achievements.js', 'tabs.js', 'live.js');
+importScripts('firebase-config.js', 'sync.js', 'achievements.js', 'tabs.js', 'live.js', 'playlists.js');
 
 function emptyStats() {
   return {
@@ -149,24 +149,32 @@ function showAchievementBadge(unseen) {
 }
 
 // Must run on the queue: it read-modify-writes the stored record.
-async function recordAchievements(stats, favorites) {
+async function recordAchievements(stats, favorites, history) {
   const saved = await loadAchievements();
   const list = evaluateAchievements(stats, favorites, saved.unlocked);
   const fresh = list.filter((a) => a.unlockedAt && !saved.unlocked[a.id]);
-  if (fresh.length) {
+  // New badges, and once the badges that predate this, are dated from when the
+  // listening actually reached them. Only ever moves a date earlier, so a badge
+  // kept through Reset holds on to its original date.
+  if (fresh.length || !saved.dated) {
     for (const a of fresh) saved.unlocked[a.id] = a.unlockedAt;
+    const replayed = replayUnlockTimes(stats, history, favorites);
+    for (const [id, at] of Object.entries(replayed)) {
+      if (saved.unlocked[id] && at < saved.unlocked[id]) saved.unlocked[id] = at;
+    }
+    for (const a of list) if (saved.unlocked[a.id]) a.unlockedAt = saved.unlocked[a.id];
+    saved.dated = true;
     saved.unseen = saved.unseen.concat(fresh.map((a) => a.id));
     await chrome.storage.local.set({ achievements: saved });
-    showAchievementBadge(saved.unseen);
+    if (fresh.length) showAchievementBadge(saved.unseen);
   }
   return { list, unseen: saved.unseen };
 }
 
 // Checked on each new play, so a badge lights up without opening the popup.
 async function checkAchievements() {
-  const stats = await loadStats();
-  const merged = await mergeRemote(stats, []);
-  await recordAchievements(merged.stats, await loadFavorites());
+  const merged = await mergeRemote(await loadStats(), await loadHistory());
+  await recordAchievements(merged.stats, await loadFavorites(), merged.history);
 }
 
 async function markAchievementsSeen() {
@@ -371,7 +379,17 @@ async function classifyVideo(videoId) {
   return lookup;
 }
 
-chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+// Playlist edits that answer the popup with their result; each runs on the queue.
+const PLAYLIST_EDITS = {
+  createPlaylist,
+  renamePlaylist,
+  deletePlaylist,
+  addToPlaylist,
+  removeFromPlaylist,
+  moveInPlaylist,
+};
+
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg && msg.type === 'tick') {
     queue = queue.then(() => recordTick(msg)).catch(() => {});
     startLive();
@@ -397,12 +415,22 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       history: await loadHistory(),
       favorites: await loadFavorites(),
       settings: await loadSettings(),
+      playlists: await loadPlaylists(),
     }))
       // Merged outside the queue: it only reads the cached remote data.
-      .then(async ({ stats, history, favorites, settings }) => {
+      .then(async ({ stats, history, favorites, settings, playlists }) => {
         const merged = await mergeRemote(stats, history);
-        const achievements = await serialized(() => recordAchievements(merged.stats, favorites));
-        return { ...merged.stats, history: merged.history, favorites, settings, achievements, sync: await syncStatus() };
+        const achievements = await serialized(() => recordAchievements(merged.stats, favorites, merged.history));
+        return {
+          ...merged.stats,
+          history: merged.history,
+          favorites,
+          settings,
+          achievements,
+          playlists,
+          playlistPlaying: await playlistStatus(),
+          sync: await syncStatus(),
+        };
       })
       .then((stats) => sendResponse(stats))
       .catch(() => sendResponse(emptyStats()));
@@ -443,6 +471,39 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       .then((result) => sendResponse(result))
       .catch(() => sendResponse({ favorite: false }));
     return true;
+  }
+
+  if (msg && Object.prototype.hasOwnProperty.call(PLAYLIST_EDITS, msg.type)) {
+    serialized(() => PLAYLIST_EDITS[msg.type](msg))
+      .then((result) => sendResponse(result))
+      .catch(() => sendResponse({ error: 'Something went wrong; try again.' }));
+    return true;
+  }
+
+  if (msg && msg.type === 'resolveSongLink') {
+    resolveSongLink(msg.url).then((result) => sendResponse(result)).catch(() => sendResponse({ error: 'Could not read that link.' }));
+    return true;
+  }
+
+  if (msg && msg.type === 'playPlaylist') {
+    startPlaylist(msg.id, msg.index);
+    return false;
+  }
+
+  if (msg && msg.type === 'stepPlaylist') {
+    stepPlaylist(msg.delta > 0 ? 1 : -1).catch(() => {});
+    return false;
+  }
+
+  if (msg && msg.type === 'stopPlaylist') {
+    stopPlaylist().catch(() => {});
+    return false;
+  }
+
+  // From the page holding a playlist's song: it finished, or was left.
+  if (msg && (msg.type === 'playlistEnded' || msg.type === 'playlistLeft')) {
+    playlistReport(msg, sender.tab ? sender.tab.id : null).catch(() => {});
+    return false;
   }
 
   if (msg && msg.type === 'setHistoryRetention') {

@@ -63,6 +63,40 @@ Every row in **Top tracks** and **Favorites** has a star. Click it to keep that 
 a tie, then the most recently starred). A starred song is never dropped when old tracks are
 pruned, and **Reset** leaves favorites alone — they are stored separately, under `favorites`.
 
+## Playlists
+
+The **Playlists** tab holds playlists that mix YouTube, YouTube Music and Spotify songs. Name one
+and click **Create**, then add songs with the **+** on any song in Top tracks, Favorites, History
+or the now-playing row, or paste a YouTube, YouTube Music or Spotify song link into the playlist
+(the title is looked up from the site's public oEmbed endpoint; offline the song is added under
+its id and still plays). Rows can be moved up and down or removed, the name edited in place, and
+**Delete** asks once more on the button itself.
+
+**Play** (or clicking a song, to start from there) opens each song in its service's tab — the tab
+you already have, or a new one — and starts it. When it finishes, the next song starts, in
+whichever tab its service lives, so a YouTube video can be followed by a Spotify track. Songs play
+where they are without switching to their tab — whether started with **Play**, a click on a song,
+previous or next, or the playlist moving on. If one hasn't started after 12 seconds (Chrome can
+hold back sound in a tab that isn't shown), its tab is brought forward. A song
+counts as finished when its player stops at the end, or moves on by itself within the last 5
+seconds (YouTube Music and Spotify go straight to their own next song, which is then paused, as is
+YouTube's "Up next" countdown, for 20 seconds). Moving to another song any other way — a skip on
+the page, another video clicked — stops the playlist rather than skipping through it. While a
+playlist plays, a bar at the top of the tab shows it with previous, stop and next, and the
+now-playing row's previous and next step through the playlist instead of the site's own queue.
+Closing the tab stops it too. A song from the iPhone's library plays as the first YouTube search
+result. Chrome may refuse to start sound in a tab you haven't clicked in, which leaves that song
+paused until you press play. Playlists are stored under `playlists` and, like favorites, survive
+**Reset**; up to 100 playlists of up to 500 songs each.
+
+## Analytics
+
+**Days you listened** shows a calendar week (Monday to Sunday), or rolling 14- or 30-day
+windows. The ‹ › arrows step back and forward a whole period at a time — a week, or 14/30
+days — as far back as listening was first recorded. Under it, **By service** splits that same period
+by service — share, songs played and time — so you can see how a week or month went. **Hours of the day** steps a day at a time
+in the same way, or adds every recorded day together under **All time**.
+
 ## Achievements
 
 The **Awards** tab lists 44 badges across listening time, single-day sessions, streaks, plays,
@@ -70,6 +104,12 @@ variety, favorites and milestones, each with a progress bar towards its goal. Th
 merged numbers, so listening synced from your other devices counts too. A badge earned since
 you last opened the tab shows a count on the toolbar icon and a **New** tag. Earned badges are
 stored under `achievements` and, like favorites, survive **Reset**.
+
+A badge's date is when your listening actually reached it, not when the extension noticed:
+the hour-by-hour listening, the play history and the favorites are replayed in order to find
+the moment each goal was crossed (to within the hour). Badges earned before achievements
+existed are back-dated the same way once. Superfan and Ultimate Fan keep the date they were
+noticed, since per-artist time has no timeline.
 
 The definitions live in `achievements.js`; the iOS app mirrors them in `Achievements.swift`,
 so keep ids and goals in step when adding one.
@@ -80,7 +120,7 @@ Signed in with Google, the extension and the [iOS app](https://github.com/Daniel
 share one set of numbers through Firebase (Cloud Firestore). Each device uploads only its own
 listening, so nothing is double counted, and every device shows **everything combined**: totals,
 the by-service split (the phone appears as **iPhone**), top tracks and artists, the charts and
-the play history. **Favorites** and the **Keep history for** setting are shared as well.
+the play history. **Favorites**, **Playlists** and the **Keep history for** setting are shared as well.
 
 Uploads happen whenever the music stops (paused, muted, or its tab closed), and an upload that
 fails offline is retried every minute until it goes through. Other devices are checked every two
@@ -104,7 +144,9 @@ through Web Audio; its volume bar gets clicked, so it relies on the page's layou
 Volume 0 counts as muted, so listening isn't counted while it's there. The phone's own song takes the mini player
 while it plays. The extension checks the tabs every 1.5 seconds and writes to Firestore only when
 the song, the play state or the volume changes, plus once a minute while playing. The playback position
-isn't shared, so the phone shows no progress for it.
+isn't shared, so the phone shows no progress for it. While a playlist plays, the phone's full
+player names it and how far along it is, and its previous and next step through the playlist; the
+app's **Library → Playlists** screen can also start one here, from any song.
 Firestore's REST API can't push to the extension, so it checks for the phone's presses every
 3 seconds while a song is loaded (every 15 seconds once it has been paused for 5 minutes). A
 press takes effect within a few seconds. A song paused for 30 minutes stops being offered, and
@@ -142,14 +184,19 @@ latter's flow for newly created Chrome-extension OAuth clients.
 Firestore layout (the iOS app reads and writes the same):
 
 ```
-users/{uid}                              historyRetention, settingsUpdatedAt, favoritesUpdatedAt
+users/{uid}                              historyRetention, settingsUpdatedAt, favoritesUpdatedAt,
+                                         playlistsUpdatedAt
 users/{uid}/favorites/{key}              key, id, title, artist, source, addedAt
+users/{uid}/playlists/{id}               id, name, tracks [{ source, id, title, artist }],
+                                         createdAt, updatedAt
 users/{uid}/devices/{deviceId}           platform, name, updatedAt, total, firstSeen, sources, parts
 users/{uid}/devices/{deviceId}/parts/{n} json — tracks, artists, days-YYYY, history-YYYY-MM-N
 users/{uid}/live/{deviceId}              platform, name, updatedAt, track — source, id, title,
-                                         artist, artwork, paused, volume, maxVolume
-users/{uid}/commands/{deviceId}          command — id, action (prev | playPause | next | volume | open), at;
-                                         volume adds value (0–2); open adds source, trackId, title, artist
+                                         artist, artwork, paused, volume, maxVolume,
+                                         playlist (id, name, index, count, or null)
+users/{uid}/commands/{deviceId}          command — id, action (prev | playPause | next | volume | open |
+                                         playlist), at; volume adds value (0–2); open adds source,
+                                         trackId, title, artist; playlist adds playlistId, index
 ```
 
 ## Known limits
@@ -175,12 +222,14 @@ content/spotify.js open.spotify.com adapter
 popup.html/.css/.js  stats UI
 tabs.js            track links, finding the music tabs and asking what they hold (popup and worker)
 live.js            now playing for the phone, the phone's prev/play/next/volume and songs it sends
+playlists.js       playlists: editing them, and playing them one song after another across tabs
 achievements.js    achievement definitions and the metrics they are measured by
 sync.js            Firebase sync: Google sign-in, Firestore over REST, merging other devices
 firebase-config.js your Firebase project's apiKey and projectId
 firestore.rules    Firestore security rules to paste into the console
 ```
 
-Data lives in `chrome.storage.local` under `stats` (and starred songs under `favorites`). It
+Data lives in `chrome.storage.local` under `stats` (starred songs under `favorites`, playlists under
+`playlists`). It
 never leaves your machine unless you sign in to sync. The **Reset** button in the popup erases the stats; favorites stay
 until you unstar them.

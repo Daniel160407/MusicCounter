@@ -109,40 +109,62 @@ async function openUrl(url, event) {
 }
 
 function renderSources(stats) {
-  const list = document.getElementById('sources');
-  const entries = Object.entries(stats.sources || {})
-    .filter(([, v]) => v > 0)
-    .sort((a, b) => b[1] - a[1]);
-
-  const perPercent = document.getElementById('per-percent');
-
-  if (entries.length === 0) {
-    list.innerHTML = '<li class="empty">Nothing recorded yet.</li>';
-    perPercent.textContent = '';
-    return;
-  }
-
   // Plays are recorded per track, so the per-service figure is their sum. Only
   // tracks that were listened at least halfway ever counted a play.
   const plays = {};
   for (const track of Object.values(stats.tracks || {})) {
     plays[track.source] = (plays[track.source] || 0) + (track.plays || 0);
   }
+  renderServiceBars(
+    document.getElementById('sources'),
+    document.getElementById('per-percent'),
+    stats.sources || {},
+    plays,
+    'Nothing recorded yet.',
+    'all',
+  );
+}
+
+// Charts and bars grow in when what they show changes — a new range, period
+// or day, or their tab being opened — but not on the 2-second poll, which
+// would restart the motion over and over. `view` names what is on show; the
+// markup is only rewritten on the poll when the numbers actually moved.
+function paint(element, view, html) {
+  const intro = element.dataset.view !== view;
+  if (!intro && element.dataset.html === html) return;
+  element.dataset.view = view;
+  element.dataset.html = html;
+  element.classList.toggle('intro', intro);
+  element.innerHTML = html;
+}
+
+// The "By service" bars, shared by the all-time list on Overview and the
+// per-period one under "Days you listened".
+function renderServiceBars(list, perPercent, sources, plays, emptyText, view) {
+  const entries = Object.entries(sources)
+    .filter(([, v]) => v > 0)
+    .sort((a, b) => b[1] - a[1]);
+
+  if (entries.length === 0) {
+    paint(list, view, `<li class="empty">${emptyText}</li>`);
+    if (perPercent) perPercent.textContent = '';
+    return;
+  }
 
   const max = entries[0][1];
   // The share is of listening time across the services, so the figures add up
   // to 100% however many of them you use.
   const total = entries.reduce((sum, [, seconds]) => sum + seconds, 0);
-  perPercent.textContent = `1% = ${formatMinutes(total / 100)}`;
-  list.innerHTML = entries.map(([source, seconds]) => `
-    <li>
+  if (perPercent) perPercent.textContent = `1% = ${formatMinutes(total / 100)}`;
+  paint(list, view, entries.map(([source, seconds], index) => `
+    <li style="--i:${index}">
       <div class="row">
         <span>${SOURCE_NAMES[source] || source}<span class="share">${Math.round((seconds / total) * 100)}%</span></span>
         <span>${plays[source] ? `<span class="count">${plays[source]} ${plays[source] === 1 ? 'song' : 'songs'}</span>` : ''}${formatDuration(seconds)}</span>
       </div>
       <div class="track"><div class="fill ${source}" style="width:${(seconds / max) * 100}%"></div></div>
     </li>
-  `).join('');
+  `).join(''));
 }
 
 // A percentage point of the shares above, in the minutes it stands for. Small
@@ -178,6 +200,7 @@ function renderTop(elementId, entries, emptyText) {
   }
   list.innerHTML = entries.map(({ name, sub, seconds, plays, url, key, favorite, source }, index) => `
     <li class="clickable" data-index="${index}" title="Open in ${escapeHtml(serviceOf(url))}">
+      ${key ? `<button class="add" data-index="${index}" title="Add to a playlist" aria-label="Add to a playlist">+</button>` : ''}
       ${key ? `<button class="star${favorite ? ' on' : ''}" data-index="${index}"
         aria-pressed="${favorite ? 'true' : 'false'}"
         title="${favorite ? 'Remove from favorites' : 'Add to favorites'}">★</button>` : ''}
@@ -201,6 +224,13 @@ function renderTop(elementId, entries, emptyText) {
     // Chrome reports middle clicks as auxclick, never as click.
     li.addEventListener('auxclick', (event) => {
       if (event.button === 1) open(event);
+    });
+  });
+
+  list.querySelectorAll('button.add').forEach((button) => {
+    button.addEventListener('click', (event) => {
+      event.stopPropagation();
+      openAddDialog(entries[Number(button.dataset.index)].track);
     });
   });
 
@@ -283,6 +313,7 @@ function renderHistory(history) {
         <span class="plays ${entry.source}">${escapeHtml(SOURCE_NAMES[entry.source] || entry.source)}</span>
         <span class="when">${escapeHtml(formatWhen(entry.at))}</span>
       </span>
+      <button class="add" data-index="${index}" title="Add to a playlist" aria-label="Add to a playlist">+</button>
     </li>
   `;
   }).join('');
@@ -302,10 +333,21 @@ function renderHistory(history) {
 
   list.querySelectorAll('li.clickable').forEach((li) => {
     const entry = shown[Number(li.dataset.index)];
-    const open = (event) => openUrl(trackUrl(entry), event);
+    const open = (event) => {
+      if (event.target.closest('button')) return;
+      openUrl(trackUrl(entry), event);
+    };
     li.addEventListener('click', open);
     li.addEventListener('auxclick', (event) => {
       if (event.button === 1) open(event);
+    });
+  });
+
+  list.querySelectorAll('button.add').forEach((button) => {
+    button.addEventListener('click', (event) => {
+      event.stopPropagation();
+      const entry = shown[Number(button.dataset.index)];
+      openAddDialog({ id: entry.id || '', title: entry.title, artist: entry.artist, source: entry.source });
     });
   });
 
@@ -431,12 +473,18 @@ const PLOT_WIDTH = 288;   // popup body, less its side padding
 const PLOT_HEIGHT = 86;   // .chart .plot
 const COLUMN_GAP = 2;
 
-function renderChart(elementId, columns) {
+// The columns each chart last drew, so the tooltip can describe the one under
+// the pointer without parsing it back out of the markup.
+const chartColumns = new Map();
+
+function renderChart(elementId, columns, view) {
   const chart = document.getElementById(elementId);
+  chartColumns.set(elementId, columns);
   const max = columns.reduce((top, c) => Math.max(top, c.total), 0);
 
   if (max === 0) {
-    chart.innerHTML = '<p class="empty">Nothing recorded yet.</p>';
+    paint(chart, view, '<p class="empty">Nothing recorded yet.</p>');
+    if (tipColumn && !tipColumn.isConnected) hideChartTip();
     return;
   }
 
@@ -446,12 +494,17 @@ function renderChart(elementId, columns) {
   // on the bars; the longer ranges and the hours carry them in the tooltip.
   const roomForShares = columnWidth >= 24;
 
-  chart.innerHTML = `
+  paint(chart, view, `
     <div class="plot">
-      ${columns.map((c) => {
+      ${columns.map((c, index) => {
         const known = CHART_SOURCES.reduce((sum, s) => sum + c.parts[s], 0);
         const used = CHART_SOURCES.filter((s) => c.parts[s] > 0);
-        const share = (s) => Math.round((c.parts[s] / known) * 100);
+        // Rounded together, so the bars and the tooltip both add up to 100.
+        const percents = Object.fromEntries(
+          withPercentages(used.map((source) => ({ source, seconds: c.parts[source] })), known)
+            .map((p) => [p.source, p.percent]),
+        );
+        const share = (s) => percents[s];
         const heightPct = Math.max((c.total / max) * 100, 3);
 
         // Records written before the per-service split existed still have a
@@ -472,18 +525,95 @@ function renderChart(elementId, columns) {
           ? `<span class="stack" style="height:${heightPct}%">${segments}</span>`
           : '<span class="stack zero"></span>';
 
-        // Every column names its split in full, however narrow it is on screen.
+        // Every column names its split in full, however narrow it is on screen:
+        // read out by screen readers here, and drawn by the chart tooltip.
         const title = known > 0
           ? `${c.title} · ${used.map((s) => `${SOURCE_NAMES[s]} ${share(s)}%`).join(', ')}`
           : c.title;
         // Not "now": that class belongs to the now-playing section, whose
         // margin would lift the column clean off the axis.
-        return `<div class="col${c.highlight ? ' current' : ''}${c.upcoming ? ' upcoming' : ''}" title="${escapeHtml(title)}">${stack}</div>`;
+        return `<div class="col${c.highlight ? ' current' : ''}${c.upcoming ? ' upcoming' : ''}" style="--i:${index}" data-index="${index}" role="img" aria-label="${escapeHtml(title)}">${stack}</div>`;
       }).join('')}
     </div>
     <div class="ticks">${columns.map((c) => `<span>${escapeHtml(c.tick || '')}</span>`).join('')}</div>
-  `;
+  `);
+  // A repaint swaps the columns out; a tooltip left on the old one would go stale.
+  if (tipColumn && !tipColumn.isConnected) hideChartTip();
 }
+
+// One tooltip serves every chart: a card with the column's time, its total and
+// each service's share, drawn as a split bar and a row per service. It sits
+// above the column under the pointer, kept inside the popup, and flips below
+// when the column is too near the top to fit it.
+const chartTip = document.createElement('div');
+chartTip.className = 'chart-tip';
+chartTip.setAttribute('aria-hidden', 'true');
+document.body.appendChild(chartTip);
+let tipColumn = null;
+
+function chartTipHtml(c) {
+  const known = CHART_SOURCES.reduce((sum, s) => sum + c.parts[s], 0);
+  const services = withPercentages(
+    CHART_SOURCES
+      .map((source) => ({ source, seconds: c.parts[source] }))
+      .filter((s) => s.seconds > 0)
+      .sort((a, b) => b.seconds - a.seconds),
+    known,
+  );
+  const total = c.upcoming
+    ? '<span class="tip-quiet">Still to come</span>'
+    : c.total > 0 ? `<strong>${formatDuration(c.total)}</strong>` : '<span class="tip-quiet">Nothing played</span>';
+  const split = services.length
+    ? `<div class="tip-split">${services.map((s) => `<i class="${s.source}" style="flex:${s.seconds}"></i>`).join('')}</div>
+       <ul class="tip-rows">${services.map((s) => `
+         <li><i class="dot ${s.source}"></i><span>${escapeHtml(SOURCE_NAMES[s.source])}</span><em>${formatDuration(s.seconds)}</em><b>${s.percent}%</b></li>`).join('')}
+       </ul>`
+    : '';
+  return `<div class="tip-head"><span>${escapeHtml(c.label || c.title)}</span>${total}</div>${split}`;
+}
+
+function placeChartTip(col) {
+  const margin = 6;
+  const rect = col.getBoundingClientRect();
+  const width = chartTip.offsetWidth;
+  const height = chartTip.offsetHeight;
+  const centre = rect.left + rect.width / 2;
+  const left = Math.max(margin, Math.min(centre - width / 2, document.documentElement.clientWidth - width - margin));
+  const below = rect.top - height - 8 < margin;
+  const stack = col.querySelector('.stack');
+  const anchorTop = stack && stack.offsetHeight ? stack.getBoundingClientRect().top : rect.bottom;
+  const top = below ? rect.bottom + 8 : anchorTop - height - 8;
+  chartTip.classList.toggle('below', below);
+  chartTip.style.left = `${left}px`;
+  chartTip.style.top = `${Math.max(margin, top)}px`;
+  chartTip.style.setProperty('--arrow-x', `${Math.max(10, Math.min(centre - left, width - 10))}px`);
+}
+
+function showChartTip(col) {
+  const chart = col.closest('.chart');
+  const columns = chart && chartColumns.get(chart.id);
+  const column = columns && columns[Number(col.dataset.index)];
+  if (!column) return hideChartTip();
+  if (tipColumn !== col) {
+    tipColumn = col;
+    chartTip.innerHTML = chartTipHtml(column);
+  }
+  placeChartTip(col);
+  chartTip.classList.add('on');
+}
+
+function hideChartTip() {
+  tipColumn = null;
+  chartTip.classList.remove('on');
+}
+
+document.addEventListener('mouseover', (event) => {
+  const col = event.target.closest && event.target.closest('.chart .col');
+  if (col) showChartTip(col);
+  else if (tipColumn) hideChartTip();
+});
+document.addEventListener('scroll', hideChartTip, true);
+window.addEventListener('blur', hideChartTip);
 
 // How many labels fit under the columns without them running together.
 function tickStep(count) {
@@ -499,19 +629,27 @@ function startOfWeek(date) {
   return start;
 }
 
-// The week view is the calendar week you are in — Monday through Sunday, with
-// the days still to come left as empty slots. The longer views are rolling
+// First day of the period the "Days you listened" chart shows. The week view
+// is a calendar week, Monday through Sunday; the longer views are rolling
 // windows ending today, where a fixed weekday order would mean nothing.
-function dayColumns(days, count) {
+// `periodsBack` steps back whole periods: weeks, or 14/30-day windows.
+function dayPeriodStart(count, periodsBack) {
+  const start = new Date();
+  start.setHours(0, 0, 0, 0);
+  if (count === 7) {
+    start.setTime(startOfWeek(start).getTime());
+    start.setDate(start.getDate() - 7 * periodsBack);
+  } else {
+    start.setDate(start.getDate() - (count - 1) - count * periodsBack);
+  }
+  return start;
+}
+
+// In the current week the days still to come are left as empty slots.
+function dayColumns(days, count, periodsBack = 0) {
   const step = tickStep(count);
   const today = dayKey(new Date());
-  const cursor = new Date();
-  cursor.setHours(0, 0, 0, 0);
-  if (count === 7) {
-    cursor.setTime(startOfWeek(cursor).getTime());
-  } else {
-    cursor.setDate(cursor.getDate() - (count - 1));
-  }
+  const cursor = dayPeriodStart(count, periodsBack);
 
   const columns = [];
   let reachedToday = false;
@@ -532,6 +670,7 @@ function dayColumns(days, count) {
       tick: (count - 1 - i) % step === 0
         ? (count <= 7 ? cursor.toLocaleDateString(undefined, { weekday: 'narrow' }) : String(cursor.getDate()))
         : '',
+      label: stamp,
       title: upcoming ? `${stamp} · still to come` : `${stamp} · ${formatDuration(total)}`,
     });
     if (isToday) reachedToday = true;
@@ -555,6 +694,7 @@ function hourColumns(hours, isToday) {
       hour,
       highlight: isToday && hour === now,
       tick: hour % 6 === 0 ? String(hour) : '',
+      label: `${hourLabel(hour)}–${hourLabel((hour + 1) % 24)}`,
       title: `${hourLabel(hour)}–${hourLabel((hour + 1) % 24)} · ${formatDuration(total)}`,
     };
   });
@@ -582,43 +722,110 @@ function dayNavLabel(date) {
 // re-renders every couple of seconds and must not undo it.
 let dayRange = 7;
 
+// How many periods back "Days you listened" is showing, 0 = the current one.
+// Reset whenever the range changes, since a period means something else then.
+let dayPeriodOffset = 0;
+
+function periodLabel(count, periodsBack, columns) {
+  if (periodsBack === 0) return count === 7 ? 'This week' : `Last ${count} days`;
+  if (count === 7 && periodsBack === 1) return 'Last week';
+  const fmt = (d) => d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+  return `${fmt(columns[0].date)} – ${fmt(columns[columns.length - 1].date)}`;
+}
+
 // Which day the "Hours of the day" chart is showing, 0 = today. Same
 // must-survive-the-poll reasoning as dayRange above.
 let hoursDayOffset = 0;
 
+// Whether "Hours of the day" shows one day or every recorded day added
+// together, the shape of a typical day. Survives the poll like the above.
+let hoursAllTime = false;
+
+// Every recorded day's hours summed into one set of 24, in the same shape as a
+// single day's entry so hourColumns can take either.
+function allTimeHours(days) {
+  const hours = {};
+  for (const entry of Object.values(days)) {
+    for (const [hour, slice] of Object.entries(entry.hours || {})) {
+      const into = hours[hour] || (hours[hour] = { total: 0, ...emptyParts() });
+      into.total += slice.total || 0;
+      addParts(into, slice);
+    }
+  }
+  return hours;
+}
+
+// The services behind the period "Days you listened" is showing: time from the
+// day columns, songs from the play history (which the retention setting may
+// have trimmed for older periods).
+function renderPeriodSources(columns, history) {
+  const seconds = {};
+  for (const column of columns) {
+    for (const [source, value] of Object.entries(column.parts)) seconds[source] = (seconds[source] || 0) + value;
+  }
+  const from = columns[0].date.getTime();
+  const until = new Date(columns[columns.length - 1].date);
+  until.setDate(until.getDate() + 1);
+  const plays = {};
+  for (const entry of history) {
+    if (entry.at >= from && entry.at < until.getTime()) plays[entry.source] = (plays[entry.source] || 0) + 1;
+  }
+  renderServiceBars(
+    document.getElementById('period-sources'),
+    null,
+    seconds,
+    plays,
+    'Nothing played in this period.',
+    `${dayRange}:${dayPeriodOffset}`,
+  );
+}
+
 function renderAnalytics(stats) {
-  const days = dayColumns(stats.days || {}, dayRange);
-  renderChart('chart-days', days);
+  const days = dayColumns(stats.days || {}, dayRange, dayPeriodOffset);
+  renderChart('chart-days', days, `${dayRange}:${dayPeriodOffset}`);
+
+  const firstSeenDay = stats.firstSeen ? new Date(stats.firstSeen) : null;
+  if (firstSeenDay) firstSeenDay.setHours(0, 0, 0, 0);
+  const current = dayPeriodOffset === 0;
+  document.getElementById('days-period-label').textContent = periodLabel(dayRange, dayPeriodOffset, days);
+  document.getElementById('days-prev-period').disabled = Boolean(firstSeenDay) && days[0].date <= firstSeenDay;
+  document.getElementById('days-next-period').disabled = current;
 
   // Days that have not happened yet must not drag the average down.
   const elapsed = days.filter((d) => !d.upcoming);
   const listened = elapsed.filter((d) => d.total > 0);
   const best = days.reduce((top, d) => (d.total > top.total ? d : top), days[0]);
-  const span = dayRange === 7
+  const span = dayRange === 7 && current
     ? `${listened.length} of ${elapsed.length} days so far this week`
     : `${listened.length} of ${dayRange} days`;
   const daysNote = document.getElementById('days-note');
   daysNote.textContent = listened.length === 0
-    ? (dayRange === 7 ? 'Nothing yet this week.' : `Nothing in the last ${dayRange} days.`)
+    ? (!current ? (dayRange === 7 ? 'Nothing that week.' : `Nothing in those ${dayRange} days.`)
+      : dayRange === 7 ? 'Nothing yet this week.' : `Nothing in the last ${dayRange} days.`)
     : `${span} · ${formatDuration(
         elapsed.reduce((sum, d) => sum + d.total, 0) / elapsed.length)} a day on average · best was ${
         best.date.toLocaleDateString(undefined, { day: 'numeric', month: 'short' })} at ${formatDuration(best.total)}.`;
 
-  const hoursDate = dayForOffset(hoursDayOffset);
-  const hoursDayEntry = (stats.days || {})[dayKey(hoursDate)];
-  const hours = hourColumns((hoursDayEntry && hoursDayEntry.hours) || {}, hoursDayOffset === 0);
-  renderChart('chart-hours', hours);
+  renderPeriodSources(days, stats.history || []);
 
+  const hoursDate = dayForOffset(hoursDayOffset);
+  const hoursDayEntry = hoursAllTime ? null : (stats.days || {})[dayKey(hoursDate)];
+  const hours = hoursAllTime
+    ? hourColumns(allTimeHours(stats.days || {}), false)
+    : hourColumns((hoursDayEntry && hoursDayEntry.hours) || {}, hoursDayOffset === 0);
+  renderChart('chart-hours', hours, hoursAllTime ? 'all' : String(hoursDayOffset));
+
+  document.getElementById('hours-day-nav').hidden = hoursAllTime;
   document.getElementById('hours-day-label').textContent = dayNavLabel(hoursDate);
-  const firstSeenDay = stats.firstSeen ? new Date(stats.firstSeen) : null;
-  if (firstSeenDay) firstSeenDay.setHours(0, 0, 0, 0);
   document.getElementById('hours-prev-day').disabled = Boolean(firstSeenDay) && hoursDate <= firstSeenDay;
   document.getElementById('hours-next-day').disabled = hoursDayOffset <= 0;
 
   const peak = hours.reduce((top, h) => (h.total > top.total ? h : top), hours[0]);
   const hoursNote = document.getElementById('hours-note');
-  hoursNote.textContent = peak.total > 0
-    ? `Your busiest hour was ${hourLabel(peak.hour)}–${hourLabel((peak.hour + 1) % 24)}, with ${formatDuration(peak.total)} all told.`
+  hoursNote.textContent = hoursAllTime && peak.total === 0
+    ? 'Nothing recorded by the hour yet.'
+    : peak.total > 0
+    ? `Your busiest hour ${hoursAllTime ? 'overall is' : 'was'} ${hourLabel(peak.hour)}–${hourLabel((peak.hour + 1) % 24)}, with ${formatDuration(peak.total)} all told.`
     // Listening recorded before this chart existed cannot be broken back down
     // into hours, so say that rather than let it read as a fault.
     : (hoursDayEntry && hoursDayEntry.total > 0
@@ -650,6 +857,7 @@ document.querySelectorAll('.sort-option').forEach((button) => {
 document.querySelectorAll('.range-option').forEach((button) => {
   button.addEventListener('click', () => {
     dayRange = Number(button.dataset.days);
+    dayPeriodOffset = 0;
     document.querySelectorAll('.range-option').forEach((other) => {
       const on = other === button;
       other.classList.toggle('on', on);
@@ -657,6 +865,28 @@ document.querySelectorAll('.range-option').forEach((button) => {
     });
     load();
   });
+});
+
+document.querySelectorAll('.scope-option').forEach((button) => {
+  button.addEventListener('click', () => {
+    hoursAllTime = button.dataset.scope === 'all';
+    document.querySelectorAll('.scope-option').forEach((other) => {
+      const on = other === button;
+      other.classList.toggle('on', on);
+      other.setAttribute('aria-pressed', on ? 'true' : 'false');
+    });
+    load();
+  });
+});
+
+document.getElementById('days-prev-period').addEventListener('click', () => {
+  dayPeriodOffset += 1;
+  load();
+});
+document.getElementById('days-next-period').addEventListener('click', () => {
+  if (dayPeriodOffset <= 0) return;
+  dayPeriodOffset -= 1;
+  load();
 });
 
 document.getElementById('hours-prev-day').addEventListener('click', () => {
@@ -747,6 +977,7 @@ const TABS = [
   { tab: 'tab-analytics', panel: 'panel-analytics' },
   { tab: 'tab-history', panel: 'panel-history' },
   { tab: 'tab-awards', panel: 'panel-awards' },
+  { tab: 'tab-playlists', panel: 'panel-playlists' },
 ];
 
 function showTab(id) {
@@ -755,13 +986,29 @@ function showTab(id) {
     const tab = document.getElementById(entry.tab);
     tab.classList.toggle('on', on);
     tab.setAttribute('aria-selected', on ? 'true' : 'false');
-    document.getElementById(entry.panel).hidden = !on;
+    tab.tabIndex = on ? 0 : -1;
+    const panel = document.getElementById(entry.panel);
+    panel.hidden = !on;
+    // Forget what the charts were showing so they grow in again on arrival.
+    if (on) panel.querySelectorAll('[data-view]').forEach((el) => { delete el.dataset.view; });
   }
+  if (latest) render(latest);
   if (id === 'tab-awards' && latest) renderAchievements(latest.achievements);
 }
 
-TABS.forEach((entry) => {
-  document.getElementById(entry.tab).addEventListener('click', () => showTab(entry.tab));
+TABS.forEach((entry, index) => {
+  const tab = document.getElementById(entry.tab);
+  tab.addEventListener('click', () => showTab(entry.tab));
+  // The usual tablist keys: arrows step through the tabs (wrapping round),
+  // Home and End jump to the ends.
+  tab.addEventListener('keydown', (event) => {
+    const moves = { ArrowLeft: index - 1, ArrowRight: index + 1, Home: 0, End: TABS.length - 1 };
+    if (!(event.key in moves)) return;
+    event.preventDefault();
+    const next = TABS[(moves[event.key] + TABS.length) % TABS.length].tab;
+    showTab(next);
+    document.getElementById(next).focus();
+  });
 });
 
 // The most recent stats the popup drew, so the share card can be built without
@@ -793,6 +1040,7 @@ function render(stats) {
   renderAnalytics(stats);
   renderHistory(stats.history);
   renderAchievements(stats.achievements);
+  renderPlaylists(stats);
   renderSync(stats.sync);
   // Skeletons stand in for the numbers until the other devices' stats arrive.
   document.body.classList.toggle('loading', Boolean(stats.sync && stats.sync.loading));
@@ -916,8 +1164,20 @@ function setPlayPause(playing) {
   playPauseButton.setAttribute('aria-label', playing ? 'Pause' : 'Play');
 }
 
+// While a playlist plays in this tab, previous and next step through its songs
+// rather than the site's own queue.
+function playlistInTab(tabId) {
+  const playing = latest && latest.playlistPlaying;
+  return Boolean(playing && tabId && playing.tabId === tabId);
+}
+
 async function sendControl(action, value) {
   if (!current || !current.tabId) return;
+  if ((action === 'prev' || action === 'next') && playlistInTab(current.tabId)) {
+    chrome.runtime.sendMessage({ type: 'stepPlaylist', delta: action === 'next' ? 1 : -1 });
+    setTimeout(load, 400);
+    return;
+  }
   try {
     await chrome.tabs.sendMessage(current.tabId, { type: 'control', action, value });
   } catch (err) {
@@ -946,6 +1206,12 @@ for (const [id, action] of Object.entries(TRANSPORT)) {
     sendControl(action);
   });
 }
+
+document.getElementById('now-add').addEventListener('click', (event) => {
+  event.stopPropagation();
+  if (!current) return;
+  openAddDialog({ id: current.id, title: current.title, artist: current.artist, source: current.source });
+});
 
 document.getElementById('now-star').addEventListener('click', async (event) => {
   event.stopPropagation();
@@ -1056,6 +1322,7 @@ document.addEventListener('keydown', (event) => {
   if (event.key !== 'Escape') return;
   if (!confirmOverlay.hidden) showConfirm(false);
   else if (!shareOverlay.hidden) showShare(false);
+  else if (!addOverlay.hidden) closeAddDialog();
 });
 
 // Keep the numbers live while the popup is open; content scripts report every
@@ -1158,11 +1425,12 @@ function shareColumns(days, period, dates) {
     slot.total += entry.total || 0;
     addParts(slot.parts, entry);
   }
-  return months.map((m, i) => ({
+  // Every month is named: each of the twelve columns is wide enough for a
+  // short name, and single letters every other month left half the bars (and
+  // the J/J, M/M, A/A pairs) unaccounted for.
+  return months.map((m) => ({
     ...m,
-    tick: i % 2 === 11 % 2
-      ? m.start.toLocaleDateString(undefined, { month: 'narrow' })
-      : '',
+    tick: m.start.toLocaleDateString(undefined, { month: 'short' }),
   }));
 }
 
@@ -1315,7 +1583,7 @@ function drawCardChart(ctx, columns, x, y, width, height) {
   columns.forEach((column, i) => {
     if (!column.tick) return;
     const left = x + i * (columnWidth + gap);
-    ctx.fillText(column.tick, left + columnWidth / 2, y + height + 40);
+    ctx.fillText(fit(ctx, column.tick, columnWidth + gap), left + columnWidth / 2, y + height + 40);
   });
   ctx.textAlign = 'left';
 }
@@ -1689,3 +1957,449 @@ seekBar.addEventListener('mousedown', (event) => {
   document.addEventListener('mouseup', up);
 });
 
+
+// --- Playlists ---------------------------------------------------------------
+//
+// The worker keeps them and plays them (playlists.js); this tab lists them, edits
+// them and starts them. Like the other lists, it is redrawn by the 2-second poll,
+// so the lists are only rebuilt when what they show has changed — the inputs are
+// fixed in the page and never rebuilt at all.
+
+// The playlist open in the detail view, or null for the list of them.
+let openPlaylistId = null;
+let playlistsSignature = '';
+let playlistTracksSignature = '';
+
+function playlistsByName(playlists) {
+  return Object.values(playlists || {})
+    .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }) || a.createdAt - b.createdAt);
+}
+
+function songCount(count) {
+  return `${count} ${count === 1 ? 'song' : 'songs'}`;
+}
+
+function serviceDots(tracks) {
+  const sources = CHART_SOURCES.filter((source) => tracks.some((t) => t.source === source));
+  return sources.length
+    ? `<span class="pl-dots" title="${escapeHtml(sources.map((s) => SOURCE_NAMES[s]).join(', '))}">${
+      sources.map((s) => `<i class="${s}"></i>`).join('')}</span>`
+    : '';
+}
+
+function playlistMessage(type, fields) {
+  return chrome.runtime.sendMessage({ type, ...fields });
+}
+
+function setNote(el, text, error = false) {
+  el.textContent = text || '';
+  el.classList.toggle('error', Boolean(error));
+}
+
+function renderPlaylists(stats) {
+  const playlists = stats.playlists || {};
+  const playing = stats.playlistPlaying || null;
+
+  const bar = document.getElementById('pl-playing');
+  bar.hidden = !playing;
+  if (playing) {
+    document.getElementById('pl-playing-name').textContent =
+      `${playing.name} · ${Math.min(playing.index + 1, playing.count)} of ${playing.count}`;
+  }
+
+  if (openPlaylistId && !playlists[openPlaylistId]) openPlaylistId = null;
+  document.getElementById('pl-index').hidden = Boolean(openPlaylistId);
+  document.getElementById('pl-detail').hidden = !openPlaylistId;
+
+  const sorted = playlistsByName(playlists);
+  const signature = JSON.stringify([sorted, playing && playing.id]);
+  if (signature !== playlistsSignature) {
+    playlistsSignature = signature;
+    const list = document.getElementById('pl-list');
+    const scroll = list.scrollTop;
+    list.innerHTML = sorted.length
+      ? sorted.map((p) => `
+        <li class="clickable" data-id="${escapeHtml(p.id)}" title="Open ${escapeHtml(p.name)}">
+          <span class="name">${escapeHtml(p.name)}${playing && playing.id === p.id ? ' ♪' : ''}<small>${songCount(p.tracks.length)}${serviceDots(p.tracks)}</small></span>
+          ${p.tracks.length ? `<button class="list-play" data-id="${escapeHtml(p.id)}" title="Play" aria-label="Play ${escapeHtml(p.name)}">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4.5 3l8 5-8 5z"/></svg></button>` : ''}
+        </li>`).join('')
+      : '<li class="empty">No playlists yet.</li>';
+    list.scrollTop = scroll;
+    list.querySelectorAll('li.clickable').forEach((li) => {
+      li.addEventListener('click', (event) => {
+        if (event.target.closest('button')) return;
+        showPlaylist(li.dataset.id);
+      });
+    });
+    list.querySelectorAll('button.list-play').forEach((button) => {
+      button.addEventListener('click', (event) => {
+        event.stopPropagation();
+        flash(button, 'press');
+        playPlaylist(button.dataset.id, 0);
+      });
+    });
+  }
+
+  if (openPlaylistId) renderPlaylistDetail(playlists[openPlaylistId], playing);
+}
+
+function renderPlaylistDetail(playlist, playing) {
+  const name = document.getElementById('pl-name');
+  if (document.activeElement !== name && name.value !== playlist.name) name.value = playlist.name;
+  document.getElementById('pl-play').disabled = playlist.tracks.length === 0;
+
+  const currentIndex = playing && playing.id === playlist.id ? playing.index : -1;
+  const signature = JSON.stringify([playlist.tracks, currentIndex]);
+  // Rebuilding the rows mid-drag would drop the one in your hand.
+  if (signature === playlistTracksSignature || trackDrag) return;
+  playlistTracksSignature = signature;
+
+  const list = document.getElementById('pl-tracks');
+  const note = document.getElementById('pl-detail-note');
+  const tracks = playlist.tracks;
+  if (tracks.length === 0) {
+    list.innerHTML = '<li class="empty">No songs yet. Use the + on any song, or paste a link above.</li>';
+    note.textContent = '';
+    return;
+  }
+  const scroll = list.scrollTop;
+  list.innerHTML = tracks.map((t, index) => {
+    const thumb = trackThumbnail(t);
+    return `
+    <li class="clickable${index === currentIndex ? ' current' : ''}" data-index="${index}" title="Click to play the playlist from here, drag to move">
+      <span class="pos" tabindex="0" role="button" aria-label="Move ${escapeHtml(t.title || t.id)}: Alt and the arrow keys"><span class="pos-num">${index === currentIndex ? '♪' : index + 1}</span><svg class="grip" viewBox="0 0 10 16" aria-hidden="true"><circle cx="3" cy="3" r="1.4"/><circle cx="7" cy="3" r="1.4"/><circle cx="3" cy="8" r="1.4"/><circle cx="7" cy="8" r="1.4"/><circle cx="3" cy="13" r="1.4"/><circle cx="7" cy="13" r="1.4"/></svg></span>
+      ${thumb
+        ? `<img class="thumb" src="${escapeHtml(thumb)}" alt="" loading="lazy">`
+        : '<span class="thumb thumb-empty">♪</span>'}
+      <span class="name">${escapeHtml(t.title || t.id)}<small>${escapeHtml(
+        [t.artist, SOURCE_NAMES[t.source]].filter(Boolean).join(' · '))}</small></span>
+      <button class="row-btn remove" data-remove="${index}" title="Remove from the playlist" aria-label="Remove from the playlist">×</button>
+    </li>`;
+  }).join('');
+  list.scrollTop = scroll;
+
+  list.querySelectorAll('img.thumb').forEach((img) => {
+    img.addEventListener('error', () => {
+      const placeholder = document.createElement('span');
+      placeholder.className = 'thumb thumb-empty';
+      placeholder.textContent = '♪';
+      img.replaceWith(placeholder);
+    }, { once: true });
+  });
+  list.querySelectorAll('li.clickable').forEach((li) => {
+    li.addEventListener('pointerdown', (event) => startTrackDrag(event, li, playlist.id));
+    li.addEventListener('click', (event) => {
+      if (event.target.closest('button') || li.dataset.dragged) return;
+      playPlaylist(playlist.id, Number(li.dataset.index));
+    });
+  });
+  list.querySelectorAll('.pos').forEach((grip) => {
+    grip.addEventListener('keydown', (event) => {
+      if (!event.altKey || (event.key !== 'ArrowUp' && event.key !== 'ArrowDown')) return;
+      event.preventDefault();
+      const from = Number(grip.closest('li').dataset.index);
+      const to = from + (event.key === 'ArrowUp' ? -1 : 1);
+      if (to < 0 || to >= tracks.length) return;
+      moveTrack(playlist.id, from, to);
+      // Keep the focus on the song that moved, so it can keep going.
+      list.querySelector(`li[data-index="${to}"] .pos`).focus();
+    });
+  });
+  list.querySelectorAll('button[data-remove]').forEach((button) => {
+    button.addEventListener('click', async (event) => {
+      event.stopPropagation();
+      await playlistMessage('removeFromPlaylist', { id: playlist.id, index: Number(button.dataset.remove) });
+      load();
+    });
+  });
+
+  const services = new Set(tracks.map((t) => t.source)).size;
+  note.textContent = `${songCount(tracks.length)}${services > 1 ? ` from ${services} services` : ''}. Click a song to play from there, drag it to move it.`;
+}
+
+// --- Reordering by drag ------------------------------------------------------
+//
+// Pointer events rather than HTML drag and drop, so the row itself follows the
+// pointer and the others slide out of its way. A press only turns into a drag
+// once it has moved a few pixels; until then it is still a click that plays.
+
+const DRAG_THRESHOLD = 4;
+const DRAG_EDGE = 28;
+let trackDrag = null;
+
+// Shown at once from the popup's own copy; the worker's answer follows.
+function moveTrack(playlistId, from, to) {
+  const playlist = latest && latest.playlists && latest.playlists[playlistId];
+  if (playlist) {
+    const [track] = playlist.tracks.splice(from, 1);
+    playlist.tracks.splice(to, 0, track);
+    const playing = latest.playlistPlaying;
+    if (playing && playing.id === playlistId) {
+      if (playing.index === from) playing.index = to;
+      else if (from < playing.index && to >= playing.index) playing.index -= 1;
+      else if (from > playing.index && to <= playing.index) playing.index += 1;
+    }
+    playlistTracksSignature = '';
+    renderPlaylists(latest);
+  }
+  playlistMessage('moveInPlaylist', { id: playlistId, from, to }).then(load);
+}
+
+function startTrackDrag(event, li, playlistId) {
+  if (event.button !== 0 || trackDrag || event.target.closest('button')) return;
+  const list = li.parentElement;
+  const rows = [...list.querySelectorAll('li[data-index]')];
+  if (rows.length < 2) return;
+
+  const from = rows.indexOf(li);
+  const tops = rows.map((row) => row.offsetTop);
+  const slot = tops[1] - tops[0];
+  // In the list's own coordinates, so scrolling it mid-drag doesn't throw it off.
+  const pointerY = (clientY) => clientY - list.getBoundingClientRect().top + list.scrollTop;
+  const startY = pointerY(event.clientY);
+  let clientY = event.clientY;
+  let to = from;
+  let dragging = false;
+  let frame = 0;
+  delete li.dataset.dragged;
+
+  const place = () => {
+    const dy = Math.max(tops[0] - tops[from], Math.min(tops[rows.length - 1] - tops[from], pointerY(clientY) - startY));
+    li.style.transform = `translateY(${dy}px)`;
+    to = Math.max(0, Math.min(rows.length - 1, from + Math.round(dy / slot)));
+    rows.forEach((row, i) => {
+      if (row === li) return;
+      const shift = from < to && i > from && i <= to ? -slot : from > to && i < from && i >= to ? slot : 0;
+      row.style.transform = shift ? `translateY(${shift}px)` : '';
+    });
+  };
+
+  // Near the list's top or bottom edge, scroll it, faster the closer you get.
+  const autoScroll = () => {
+    const box = list.getBoundingClientRect();
+    const speed = clientY < box.top + DRAG_EDGE ? -(box.top + DRAG_EDGE - clientY)
+      : clientY > box.bottom - DRAG_EDGE ? clientY - (box.bottom - DRAG_EDGE) : 0;
+    if (speed) {
+      list.scrollTop += speed / 3;
+      place();
+    }
+    frame = requestAnimationFrame(autoScroll);
+  };
+
+  const move = (e) => {
+    clientY = e.clientY;
+    if (!dragging) {
+      if (Math.abs(pointerY(clientY) - startY) < DRAG_THRESHOLD) return;
+      dragging = true;
+      trackDrag = { playlistId };
+      li.dataset.dragged = '1';
+      li.classList.add('dragging');
+      list.classList.add('sorting');
+      frame = requestAnimationFrame(autoScroll);
+    }
+    place();
+  };
+
+  const end = () => {
+    li.removeEventListener('pointermove', move);
+    li.removeEventListener('pointerup', end);
+    li.removeEventListener('pointercancel', end);
+    if (!dragging) return;
+    cancelAnimationFrame(frame);
+    li.classList.remove('dragging');
+    list.classList.remove('sorting');
+    rows.forEach((row) => { row.style.transform = ''; });
+    trackDrag = null;
+    if (to !== from) moveTrack(playlistId, from, to);
+    // The click that follows the release is not a request to play.
+    setTimeout(() => { delete li.dataset.dragged; }, 0);
+  };
+
+  try {
+    li.setPointerCapture(event.pointerId);
+  } catch (err) {
+    // Not a live pointer; the moves still arrive while it stays over the row.
+  }
+  li.addEventListener('pointermove', move);
+  li.addEventListener('pointerup', end);
+  li.addEventListener('pointercancel', end);
+}
+
+function showPlaylist(id) {
+  openPlaylistId = id;
+  playlistTracksSignature = '';
+  setNote(document.getElementById('pl-link-note'), '');
+  resetDeleteButton();
+  document.getElementById('pl-tracks').scrollTop = 0;
+  if (latest) renderPlaylists(latest);
+}
+
+function playPlaylist(id, index) {
+  playlistMessage('playPlaylist', { id, index });
+  // The song takes a few seconds to open; the poll shows it once it has.
+  setTimeout(load, 600);
+}
+
+document.getElementById('pl-create').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const input = document.getElementById('pl-create-name');
+  const reply = await playlistMessage('createPlaylist', { name: input.value });
+  if (reply && reply.playlist) {
+    input.value = '';
+    await load();
+    showPlaylist(reply.playlist.id);
+  }
+});
+
+document.getElementById('pl-back').addEventListener('click', () => {
+  openPlaylistId = null;
+  if (latest) renderPlaylists(latest);
+});
+
+const playlistNameInput = document.getElementById('pl-name');
+async function renameOpenPlaylist() {
+  if (!openPlaylistId) return;
+  await playlistMessage('renamePlaylist', { id: openPlaylistId, name: playlistNameInput.value });
+  load();
+}
+playlistNameInput.addEventListener('change', renameOpenPlaylist);
+playlistNameInput.addEventListener('keydown', (event) => {
+  if (event.key === 'Enter') playlistNameInput.blur();
+});
+
+document.getElementById('pl-play').addEventListener('click', () => {
+  if (openPlaylistId) playPlaylist(openPlaylistId, 0);
+});
+
+// Deleting asks once more on the button itself rather than with a dialog.
+const deleteButton = document.getElementById('pl-delete');
+let deleteTimer = null;
+function resetDeleteButton() {
+  clearTimeout(deleteTimer);
+  deleteButton.classList.remove('confirming');
+  deleteButton.textContent = 'Delete';
+}
+deleteButton.addEventListener('click', async () => {
+  if (!openPlaylistId) return;
+  if (!deleteButton.classList.contains('confirming')) {
+    deleteButton.classList.add('confirming');
+    deleteButton.textContent = 'Delete?';
+    deleteTimer = setTimeout(resetDeleteButton, 3000);
+    return;
+  }
+  resetDeleteButton();
+  await playlistMessage('deletePlaylist', { id: openPlaylistId });
+  openPlaylistId = null;
+  load();
+});
+
+document.getElementById('pl-link').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const input = document.getElementById('pl-link-url');
+  const note = document.getElementById('pl-link-note');
+  const button = event.currentTarget.querySelector('button');
+  if (!openPlaylistId || !input.value.trim()) return;
+  button.disabled = true;
+  setNote(note, 'Looking it up…');
+  try {
+    const found = await playlistMessage('resolveSongLink', { url: input.value });
+    if (!found || found.error) {
+      setNote(note, (found && found.error) || 'Could not read that link.', true);
+      return;
+    }
+    const reply = await playlistMessage('addToPlaylist', { id: openPlaylistId, track: found.track });
+    if (reply && reply.error) {
+      setNote(note, reply.error, true);
+      return;
+    }
+    input.value = '';
+    setNote(note, `Added ${found.track.title}.`);
+    setTimeout(() => { if (note.textContent === `Added ${found.track.title}.`) setNote(note, ''); }, 3000);
+    load();
+  } finally {
+    button.disabled = false;
+  }
+});
+
+document.getElementById('pl-prev').addEventListener('click', (event) => {
+  flash(event.currentTarget, 'press');
+  playlistMessage('stepPlaylist', { delta: -1 });
+  setTimeout(load, 600);
+});
+document.getElementById('pl-next').addEventListener('click', (event) => {
+  flash(event.currentTarget, 'press');
+  playlistMessage('stepPlaylist', { delta: 1 });
+  setTimeout(load, 600);
+});
+document.getElementById('pl-stop').addEventListener('click', (event) => {
+  flash(event.currentTarget, 'press');
+  playlistMessage('stopPlaylist');
+  setTimeout(load, 400);
+});
+
+// --- Adding a song to a playlist ---------------------------------------------
+
+const addOverlay = document.getElementById('add-overlay');
+const addNote = document.getElementById('add-note');
+let addingTrack = null;
+
+function openAddDialog(track) {
+  if (!track || !(track.title || track.id)) return;
+  addingTrack = { id: track.id || '', title: track.title || '', artist: track.artist || '', source: track.source };
+  document.getElementById('add-song').innerHTML = `${escapeHtml(addingTrack.title || addingTrack.id)}${
+    addingTrack.artist ? ` <small>· ${escapeHtml(addingTrack.artist)}</small>` : ''}`;
+  setNote(addNote, '');
+  document.getElementById('add-create-name').value = '';
+  renderAddList();
+  addOverlay.hidden = false;
+}
+
+function closeAddDialog() {
+  addOverlay.hidden = true;
+  addingTrack = null;
+}
+
+function renderAddList() {
+  const list = document.getElementById('add-list');
+  const sorted = playlistsByName(latest && latest.playlists);
+  const key = `${addingTrack.source}:${addingTrack.id || addingTrack.title}`;
+  list.innerHTML = sorted.length
+    ? sorted.map((p) => {
+      const has = p.tracks.some((t) => `${t.source}:${t.id || t.title}` === key);
+      return `
+      <li class="clickable" data-id="${escapeHtml(p.id)}" title="${has ? 'Already in this playlist' : `Add to ${escapeHtml(p.name)}`}">
+        <span class="name">${escapeHtml(p.name)}<small>${songCount(p.tracks.length)}</small></span>
+        <span class="meta"><span class="time">${has ? '✓' : '+'}</span></span>
+      </li>`;
+    }).join('')
+    : '<li class="empty">No playlists yet — name one below.</li>';
+  list.querySelectorAll('li.clickable').forEach((li) => {
+    li.addEventListener('click', async () => {
+      const reply = await playlistMessage('addToPlaylist', { id: li.dataset.id, track: addingTrack });
+      if (reply && reply.error) {
+        setNote(addNote, reply.error, true);
+        return;
+      }
+      await load();
+      closeAddDialog();
+    });
+  });
+}
+
+document.getElementById('add-create').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const input = document.getElementById('add-create-name');
+  const reply = await playlistMessage('createPlaylist', { name: input.value, track: addingTrack });
+  if (!reply || reply.error) {
+    setNote(addNote, (reply && reply.error) || 'Could not create the playlist.', true);
+    return;
+  }
+  await load();
+  closeAddDialog();
+});
+
+document.getElementById('add-close').addEventListener('click', closeAddDialog);
+addOverlay.addEventListener('click', (event) => {
+  if (event.target === addOverlay) closeAddDialog();
+});
