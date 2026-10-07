@@ -46,6 +46,13 @@ it away, so flicking through a playlist adds no plays. Replaying a song from the
 another one. Where the track length cannot be read — a live stream, an older Spotify layout —
 a flat minute of listening counts instead.
 
+**Collaborations named in the title.** A YouTube video like "Irina Rimes x Delia - Petale" is
+often posted on only one of the artists' channels. When a song's title credits an artist you
+have already listened to — on the side of the " - " that names the channel's artist, or after
+"feat.", "ft." or "(with" — that artist is attached: the song is recorded as
+**Irina Rimes, Delia**, the same way Spotify lists several artists. Longer names win, so a known
+"Delia Matache" is not also read as "Delia". The iPhone app applies the same rule to its songs.
+
 ## Pinning the popup
 
 The popup's header buttons are icons — **Share**, **Refresh**, **Reset** and **Pin**, left to
@@ -109,12 +116,26 @@ days — as far back as listening was first recorded. Under it, **By service** s
 by service — share, songs played and time — so you can see how a week or month went. **Hours of the day** steps a day at a time
 in the same way, or adds every recorded day together under **All time**.
 
+## Daily goal
+
+Under **listened today**, a bar tracks the **daily goal**: yesterday's listening on every device plus
+one hour, so it rises after a big day and eases off after a quiet one (an hour if you didn't listen
+yesterday) — the same goal the iOS app sets. The moment today's listening reaches it, a **Daily goal
+reached** notification pops up with the achievement chime (once a day; clicking it opens the popup).
+The day it was last announced is stored under `dailyGoal`.
+
 ## Achievements
 
-The **Awards** tab lists 44 badges across listening time, single-day sessions, streaks, plays,
-variety, favorites and milestones, each with a progress bar towards its goal. They are measured on the
-merged numbers, so listening synced from your other devices counts too. A badge earned since
-you last opened the tab shows a count on the toolbar icon and a **New** tag. Earned badges are
+The **Awards** tab shows 51 badges across listening time, single-day sessions, streaks, plays,
+variety, favorites and milestones. A ring at the top counts how many you've earned, next to a card
+for the badge you're closest to earning. Below that, each group is a grid of medals. A medal's rim
+fills as you get closer to its goal and turns gold once it's earned. Click a medal to see its goal,
+progress and the date you earned it. **All / In progress / Earned** filters the grid, and the popup
+remembers your choice. Badges are measured on the merged numbers, so listening synced from your
+other devices counts too. Badges won within one day, week or weekend (Deep Session, Switch Hitter, the plays-per-day badges, Big Week, Weekend Warrior and so on) are earned by your best one, but while locked their progress shows the period you're in now, such as "45m / 2h today" or "8h / 20h this week". A badge earned since you last opened the tab shows a count on the toolbar
+icon and a **New** dot on its medal, and a short chime plays the moment one is earned (through an
+offscreen page, `offscreen.html`, since the service worker can't play audio; the iOS app plays the
+same `sounds/achievement.wav`). Earned badges are
 stored under `achievements` and, like favorites, survive **Reset**.
 
 A badge's date is when your listening actually reached it, not when the extension noticed:
@@ -131,7 +152,7 @@ so keep ids and goals in step when adding one.
 Signed in with Google, the extension and the [iOS app](https://github.com/Daniel160407/MusicCounterIOS)
 share one set of numbers through Firebase (Cloud Firestore). Each device uploads only its own
 listening, so nothing is double counted, and every device shows **everything combined**: totals,
-the by-service split (the phone appears as **iPhone**), top tracks and artists, the charts and
+the by-service split (the phone appears as **Pocket**), top tracks and artists, the charts and
 the play history. **Favorites**, **Playlists** and the **Keep history for** setting are shared as well.
 
 Uploads happen whenever the music stops (paused, muted, or its tab closed), and an upload that
@@ -236,6 +257,8 @@ tabs.js            track links, finding the music tabs and asking what they hold
 live.js            now playing for the phone, the phone's prev/play/next/volume and songs it sends
 playlists.js       playlists: editing them, and playing them one song after another across tabs
 achievements.js    achievement definitions and the metrics they are measured by
+offscreen.html/.js plays the achievement / daily-goal chime for the service worker
+sounds/            achievement.wav, the unlock chime (shared with the iOS app)
 sync.js            Firebase sync: Google sign-in, Firestore over REST, merging other devices
 firebase-config.js your Firebase project's apiKey and projectId
 firestore.rules    Firestore security rules to paste into the console

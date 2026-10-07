@@ -2,7 +2,7 @@ const SOURCE_NAMES = {
   ytmusic: 'YouTube Music',
   youtube: 'YouTube',
   spotify: 'Spotify',
-  ios: 'iPhone',
+  ios: 'Pocket',
 };
 
 // Opened from the Pin button, the page lives in a window of its own: it stays
@@ -915,15 +915,58 @@ document.getElementById('hours-next-day').addEventListener('click', () => {
 // though the worker is told they've been seen.
 let freshAwards = new Set();
 let awardsSignature = '';
+let latestAwards = null;
+// The badge whose details are open, and which badges the grid shows.
+let selectedAward = null;
+let awardsFilter = 'all';
+try {
+  const saved = localStorage.getItem('awardsFilter');
+  if (['all', 'progress', 'earned'].includes(saved)) awardsFilter = saved;
+} catch (_) { /* storage unavailable: start on All */ }
 
 function awardProgress(a) {
   if (a.unit === 'flag') return '';
-  if (a.unit === 'time') return `${formatDuration(a.value)} / ${formatDuration(a.goal)}`;
+  // A badge won within one day, week or weekend shows the one you're in.
+  const period = a.period ? ` ${a.period}` : '';
+  if (a.unit === 'time') return `${formatDuration(a.value)} / ${formatDuration(a.goal)}${period}`;
   const fmt = (n) => Math.floor(n).toLocaleString();
-  return `${fmt(a.value)} / ${fmt(a.goal)}${a.unit === 'days' ? ' days' : ''}`;
+  const suffix = a.unit === 'days' ? ' days' : a.unit === 'weeks' ? ' weeks' : '';
+  return `${fmt(a.value)} / ${fmt(a.goal)}${suffix}${period}`;
+}
+
+function awardPercent(a) {
+  if (a.unlockedAt) return 100;
+  return a.goal ? Math.min(99, Math.floor((a.value / a.goal) * 100)) : 0;
+}
+
+// What a tile says under its title: when it was earned, or how far along it is.
+function awardCaption(a) {
+  if (a.unlockedAt) return formatWhen(a.unlockedAt);
+  if (a.unit === 'flag') return 'Locked';
+  return `${awardPercent(a)}%`;
+}
+
+function awardDetail(a) {
+  const fresh = freshAwards.has(a.id);
+  const status = a.unlockedAt
+    ? `<span class="award-detail-status earned">Earned ${escapeHtml(formatWhen(a.unlockedAt))}</span>`
+    : a.unit === 'flag'
+      ? '<span class="award-detail-status">Not earned yet</span>'
+      : `<span class="award-bar"><i style="width:${awardPercent(a)}%"></i></span>
+         <span class="award-detail-status">${escapeHtml(awardProgress(a))}<b>${awardPercent(a)}%</b></span>`;
+  return `
+    <div class="award-detail ${a.unlockedAt ? 'earned' : 'locked'}" id="award-detail" role="region" aria-label="${escapeHtml(a.title)}">
+      <span class="award-detail-icon" aria-hidden="true">${a.icon}</span>
+      <span class="award-detail-body">
+        <span class="award-detail-title">${escapeHtml(a.title)}${fresh ? '<em>New</em>' : ''}</span>
+        <small>${escapeHtml(a.text)}</small>
+        ${status}
+      </span>
+    </div>`;
 }
 
 function renderAchievements(achievements) {
+  latestAwards = achievements;
   const list = (achievements && achievements.list) || [];
   const unseen = (achievements && achievements.unseen) || [];
   document.getElementById('awards-dot').hidden = unseen.length === 0;
@@ -935,51 +978,124 @@ function renderAchievements(achievements) {
   }
 
   // The poll redraws every two seconds; only rebuild when something moved.
-  const signature = JSON.stringify([list.map((a) => [a.value, a.unlockedAt]), [...freshAwards]]);
+  const signature = JSON.stringify([
+    list.map((a) => [a.value, a.unlockedAt]), [...freshAwards], awardsFilter, selectedAward,
+  ]);
   if (signature === awardsSignature) return;
   awardsSignature = signature;
 
   const earned = list.filter((a) => a.unlockedAt);
+  const share = list.length ? Math.round((earned.length / list.length) * 100) : 0;
   document.getElementById('awards-unlocked').textContent = earned.length;
   document.getElementById('awards-total').textContent = list.length;
-  document.getElementById('awards-meter-fill').style.width = `${list.length ? (earned.length / list.length) * 100 : 0}%`;
+  document.getElementById('awards-ring-fill').setAttribute('stroke-dasharray', `${share} 100`);
+  document.getElementById('awards-ring').setAttribute('aria-label', `${earned.length} of ${list.length} achievements earned`);
 
   // The locked badge you're furthest along on is the one worth chasing.
   const next = list
     .filter((a) => !a.unlockedAt && a.unit !== 'flag')
     .sort((a, b) => b.value / b.goal - a.value / a.goal)[0];
-  document.getElementById('awards-next').textContent = earned.length === list.length && list.length
-    ? 'Every achievement earned. Impressive.'
-    : next ? `Closest: ${next.title} — ${awardProgress(next)}.` : '';
+  const nextCard = document.getElementById('awards-next');
+  const allDone = list.length > 0 && earned.length === list.length;
+  nextCard.hidden = !next && !allDone;
+  nextCard.disabled = !next;
+  nextCard.dataset.id = next ? next.id : '';
+  nextCard.classList.toggle('done', allDone);
+  document.getElementById('awards-next-label').textContent = allDone ? 'All done' : 'Closest to earning';
+  document.getElementById('awards-next-icon').textContent = allDone ? '🏅' : next ? next.icon : '';
+  document.getElementById('awards-next-title').textContent = allDone ? 'Every achievement earned' : next ? next.title : '';
+  document.getElementById('awards-next-bar').style.width = `${allDone ? 100 : next ? awardPercent(next) : 0}%`;
+  document.getElementById('awards-next-progress').textContent = allDone ? 'Impressive.' : next ? awardProgress(next) : '';
+  nextCard.title = next ? `${next.text} — show details` : '';
 
+  const latestEarned = earned.slice().sort((a, b) => b.unlockedAt - a.unlockedAt)[0];
+  document.getElementById('awards-recent').textContent = latestEarned
+    ? `Latest: ${latestEarned.icon} ${latestEarned.title}` : '';
+  document.getElementById('awards-recent').title = latestEarned
+    ? `Earned ${formatWhen(latestEarned.unlockedAt)}` : '';
+
+  document.querySelectorAll('.award-filter').forEach((button) => {
+    const on = button.dataset.filter === awardsFilter;
+    button.classList.toggle('on', on);
+    button.setAttribute('aria-pressed', on ? 'true' : 'false');
+  });
+
+  const shown = (a) => awardsFilter === 'all'
+    || (awardsFilter === 'earned' ? Boolean(a.unlockedAt) : !a.unlockedAt);
   const groups = new Map();
   for (const a of list) {
     if (!groups.has(a.group)) groups.set(a.group, []);
     groups.get(a.group).push(a);
   }
 
-  document.getElementById('awards').innerHTML = [...groups].map(([group, items]) => `
-    <section>
-      <h2 class="service-head">${escapeHtml(group)}<span class="per-percent">${items.filter((a) => a.unlockedAt).length}/${items.length}</span></h2>
-      <ul class="awards">${items.map((a) => {
-        const pct = Math.round((a.value / a.goal) * 100);
+  const sections = [...groups].map(([group, items]) => {
+    const visible = items.filter(shown);
+    if (!visible.length) return '';
+    const got = items.filter((a) => a.unlockedAt).length;
+    const open = visible.find((a) => a.id === selectedAward);
+    return `
+    <section class="award-group">
+      <h2 class="service-head">${escapeHtml(group)}<span class="per-percent${got === items.length ? ' complete' : ''}">${got}/${items.length}</span></h2>
+      <ul class="award-grid">${visible.map((a) => {
         const state = a.unlockedAt ? 'earned' : 'locked';
-        const meta = a.unlockedAt
-          ? `Earned ${escapeHtml(formatWhen(a.unlockedAt))}`
-          : escapeHtml(awardProgress(a));
+        const fresh = freshAwards.has(a.id);
         return `
-        <li class="award ${state}${freshAwards.has(a.id) ? ' fresh' : ''}" title="${escapeHtml(a.text)}">
-          <span class="award-icon" aria-hidden="true">${a.icon}</span>
-          <span class="award-body">
-            <span class="award-title">${escapeHtml(a.title)}${freshAwards.has(a.id) ? '<em>New</em>' : ''}</span>
-            <small>${escapeHtml(a.text)}</small>
-            ${a.unlockedAt || a.unit === 'flag' ? '' : `<span class="award-bar"><i style="width:${pct}%"></i></span>`}
-          </span>
-          <span class="award-meta">${meta}</span>
+        <li>
+          <button class="award-tile ${state}${fresh ? ' fresh' : ''}${a.id === selectedAward ? ' on' : ''}" data-id="${escapeHtml(a.id)}"
+            aria-expanded="${a.id === selectedAward}" title="${escapeHtml(a.text)}">
+            <span class="award-medal" style="--p:${awardPercent(a)}"><span class="award-icon" aria-hidden="true">${a.icon}</span>${fresh ? '<i class="award-new" aria-label="New"></i>' : ''}</span>
+            <span class="award-title">${escapeHtml(a.title)}</span>
+            <span class="award-caption">${escapeHtml(awardCaption(a))}</span>
+          </button>
         </li>`;
       }).join('')}</ul>
-    </section>`).join('');
+      ${open ? awardDetail(open) : ''}
+    </section>`;
+  }).join('');
+
+  document.getElementById('awards').innerHTML = sections || (!list.length ? '' : `
+    <p class="awards-empty">${awardsFilter === 'earned'
+      ? 'Nothing earned yet — your first minute of listening earns First Note.'
+      : 'Nothing left to chase. Every achievement is yours.'}</p>`);
 }
+
+function selectAward(id, scroll) {
+  selectedAward = selectedAward === id ? null : id;
+  // A badge hidden by the filter can't open, so show everything to reveal it.
+  const a = latestAwards && (latestAwards.list || []).find((x) => x.id === id);
+  if (selectedAward && a && awardsFilter !== 'all'
+      && (awardsFilter === 'earned') !== Boolean(a.unlockedAt)) {
+    setAwardsFilter('all');
+  }
+  renderAchievements(latestAwards);
+  if (scroll && selectedAward) {
+    document.getElementById('award-detail')?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }
+}
+
+function setAwardsFilter(filter) {
+  awardsFilter = filter;
+  try { localStorage.setItem('awardsFilter', filter); } catch (_) { /* not remembered */ }
+}
+
+document.getElementById('awards').addEventListener('click', (event) => {
+  const tile = event.target.closest('.award-tile');
+  if (tile) selectAward(tile.dataset.id, false);
+});
+
+document.getElementById('awards-next').addEventListener('click', (event) => {
+  const id = event.currentTarget.dataset.id;
+  if (!id) return;
+  if (selectedAward !== id) selectAward(id, true);
+  else document.getElementById('award-detail')?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+});
+
+document.querySelectorAll('.award-filter').forEach((button) => {
+  button.addEventListener('click', () => {
+    setAwardsFilter(button.dataset.filter);
+    renderAchievements(latestAwards);
+  });
+});
 
 const TABS = [
   { tab: 'tab-overview', panel: 'panel-overview' },
@@ -1035,11 +1151,24 @@ function setValue(id, text) {
   el.classList.add('pop');
 }
 
+// One hour more than yesterday, across every device — the background script
+// announces reaching it, and the iOS app sets the same goal.
+function renderGoal(days) {
+  const today = sumLastDays(days, 1);
+  const goal = sumLastDays(days, 2) - today + 60 * 60;
+  const reached = today >= goal;
+  document.getElementById('goal').classList.toggle('reached', reached);
+  document.getElementById('goal-fill').style.width = `${Math.min(100, (today / goal) * 100)}%`;
+  document.getElementById('goal-value').textContent = formatDuration(goal);
+  document.getElementById('goal-left').textContent = reached ? '✓ Goal reached' : `${formatDuration(goal - today)} to go`;
+}
+
 function render(stats) {
   latest = stats;
   const days = stats.days || {};
   const favorites = stats.favorites || {};
   setValue('today-value', formatDuration(sumLastDays(days, 1)));
+  renderGoal(days);
   setValue('week-value', formatDuration(sumLastDays(days, 7)));
   setValue('month-value', formatDuration(sumLastDays(days, 30)));
   setValue('all-value', formatDuration(stats.total || 0));

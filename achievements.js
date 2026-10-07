@@ -16,6 +16,17 @@ const HABIT_DAY_SECONDS = 30 * 60;
 // Days with no listening at all between two listening days, for Welcome Back.
 const COMEBACK_GAP_DAYS = 30;
 
+// Badges won within one day, week or weekend are earned by your best one, but
+// while locked they show how the current one is going: metric -> the metric
+// measuring the period you're in, and the word that names it.
+const CURRENT_PERIOD = {
+  bestDaySeconds: { metric: 'todaySeconds', period: 'today' },
+  bestDayPlays: { metric: 'todayPlays', period: 'today' },
+  bestDayServices: { metric: 'todayServices', period: 'today' },
+  bestWeekSeconds: { metric: 'thisWeekSeconds', period: 'this week' },
+  bestWeekendSeconds: { metric: 'thisWeekendSeconds', period: 'this weekend' },
+};
+
 const ACHIEVEMENTS = [
   // Listening time
   { id: 'first-note', group: 'Time', icon: '🎵', title: 'First Note', text: 'Listen for your first minute', metric: 'totalSeconds', goal: 60, unit: 'time' },
@@ -30,6 +41,7 @@ const ACHIEVEMENTS = [
   { id: 'marathon', group: 'Sessions', icon: '🏃', title: 'Marathon', text: 'Listen for 6 hours in one day', metric: 'bestDaySeconds', goal: 6 * HOUR, unit: 'time' },
   { id: 'all-nighter', group: 'Sessions', icon: '🌙', title: 'All-Nighter', text: 'Listen for 10 hours in one day', metric: 'bestDaySeconds', goal: 10 * HOUR, unit: 'time' },
   { id: 'weekend-warrior', group: 'Sessions', icon: '🎉', title: 'Weekend Warrior', text: 'Listen for 5 hours over one Saturday and Sunday', metric: 'bestWeekendSeconds', goal: 5 * HOUR, unit: 'time' },
+  { id: 'big-week', group: 'Sessions', icon: '📅', title: 'Big Week', text: 'Listen for 20 hours in one week', metric: 'bestWeekSeconds', goal: 20 * HOUR, unit: 'time' },
   { id: 'night-owl', group: 'Sessions', icon: '🦉', title: 'Night Owl', text: 'Listen for 10 minutes between midnight and 4 AM', metric: 'nightOwl', goal: 1, unit: 'flag' },
   { id: 'early-bird', group: 'Sessions', icon: '🐦', title: 'Early Bird', text: 'Listen for 10 minutes between 5 and 7 AM', metric: 'earlyBird', goal: 1, unit: 'flag' },
   { id: 'dawn-to-dusk', group: 'Sessions', icon: '🌅', title: 'Dawn to Dusk', text: 'Listen for 10 minutes in the night, morning, afternoon and evening of one day', metric: 'dawnToDusk', goal: 1, unit: 'flag' },
@@ -44,6 +56,7 @@ const ACHIEVEMENTS = [
   { id: 'daily-habit', group: 'Streaks', icon: '⏰', title: 'Daily Habit', text: 'Listen for 30 minutes a day, 7 days in a row', metric: 'longestHabit', goal: 7, unit: 'days' },
   { id: 'regular', group: 'Streaks', icon: '📈', title: 'Regular', text: 'Listen on 30 different days', metric: 'activeDays', goal: 30, unit: 'days' },
   { id: 'devoted', group: 'Streaks', icon: '🙌', title: 'Devoted', text: 'Listen on 100 different days', metric: 'activeDays', goal: 100, unit: 'days' },
+  { id: 'weekly-ritual', group: 'Streaks', icon: '🗓️', title: 'Weekly Ritual', text: 'Listen in 52 different weeks', metric: 'activeWeeks', goal: 52, unit: 'weeks' },
 
   // Plays
   { id: 'century', group: 'Plays', icon: '▶️', title: 'Century', text: 'Play 100 tracks', metric: 'totalPlays', goal: 100, unit: 'count' },
@@ -52,6 +65,10 @@ const ACHIEVEMENTS = [
   { id: 'on-repeat', group: 'Plays', icon: '🔁', title: 'On Repeat', text: 'Play the same track 10 times', metric: 'topTrackPlays', goal: 10, unit: 'count' },
   { id: 'obsessed', group: 'Plays', icon: '😵‍💫', title: 'Obsessed', text: 'Play the same track 50 times', metric: 'topTrackPlays', goal: 50, unit: 'count' },
   { id: 'broken-record', group: 'Plays', icon: '📀', title: 'Broken Record', text: 'Play the same track 100 times', metric: 'topTrackPlays', goal: 100, unit: 'count' },
+  { id: 'day-plays-50', group: 'Plays', icon: '🎶', title: 'Full Rotation', text: 'Play 50 tracks in one day', metric: 'bestDayPlays', goal: 50, unit: 'count' },
+  { id: 'day-plays-100', group: 'Plays', icon: '💯', title: 'Hundred Club', text: 'Play 100 tracks in one day', metric: 'bestDayPlays', goal: 100, unit: 'count' },
+  { id: 'day-plays-300', group: 'Plays', icon: '⚡', title: 'Track Frenzy', text: 'Play 300 tracks in one day', metric: 'bestDayPlays', goal: 300, unit: 'count' },
+  { id: 'day-plays-500', group: 'Plays', icon: '♾️', title: 'Endless Mix', text: 'Play 500 tracks in one day', metric: 'bestDayPlays', goal: 500, unit: 'count' },
 
   // Variety
   { id: 'explorer', group: 'Variety', icon: '🧭', title: 'Explorer', text: 'Listen to 10 different artists', metric: 'artistCount', goal: 10, unit: 'count' },
@@ -63,7 +80,8 @@ const ACHIEVEMENTS = [
   { id: 'superfan', group: 'Variety', icon: '🤩', title: 'Superfan', text: 'Spend 10 hours with one artist', metric: 'topArtistSeconds', goal: 10 * HOUR, unit: 'time' },
   { id: 'ultimate-fan', group: 'Variety', icon: '💜', title: 'Ultimate Fan', text: 'Spend 50 hours with one artist', metric: 'topArtistSeconds', goal: 50 * HOUR, unit: 'time' },
   { id: 'everywhere', group: 'Variety', icon: '📡', title: 'Everywhere', text: 'Listen on 3 different services', metric: 'serviceCount', goal: 3, unit: 'count' },
-  { id: 'omnivore', group: 'Variety', icon: '🌐', title: 'Omnivore', text: 'Listen on YouTube, YouTube Music, Spotify and iPhone', metric: 'serviceCount', goal: 4, unit: 'count' },
+  { id: 'switch-hitter', group: 'Variety', icon: '🔀', title: 'Switch Hitter', text: 'Listen on 3 services in one day', metric: 'bestDayServices', goal: 3, unit: 'count' },
+  { id: 'pocket-rocket', group: 'Variety', icon: '🚀', title: 'Pocket Rocket', text: 'Listen for 50 hours on Pocket', metric: 'pocketSeconds', goal: 50 * HOUR, unit: 'time' },
 
   // Favorites
   { id: 'first-love', group: 'Favorites', icon: '⭐', title: 'First Love', text: 'Star your first favorite', metric: 'favoriteCount', goal: 1, unit: 'count' },
@@ -94,6 +112,22 @@ function parseDayKey(key) {
 
 // Whole calendar days from `a` to `b`, rounded so a daylight-saving change
 // doesn't throw it off.
+// The Monday that starts the week holding `date`, as a day key.
+function weekKeyOf(date) {
+  return dayKeyOf(new Date(date.getFullYear(), date.getMonth(), date.getDate() - ((date.getDay() + 6) % 7)));
+}
+
+// Seconds per known service in one hour slice; listening from before the
+// per-service split ("other") names no service.
+function sliceServices(slice) {
+  const out = {};
+  for (const [source, seconds] of Object.entries(slice || {})) {
+    if (source === 'total' || source === 'other' || !(seconds > 0)) continue;
+    out[source] = seconds;
+  }
+  return out;
+}
+
 function daysBetween(a, b) {
   return Math.round((b - a) / 86400000);
 }
@@ -121,8 +155,8 @@ function longestRun(keys) {
 }
 
 // Every number an achievement can be measured by, from the (merged) stats the
-// worker hands the popup.
-function achievementMetrics(stats, favorites) {
+// worker hands the popup, and the (merged) play history.
+function achievementMetrics(stats, favorites, history) {
   const days = stats.days || {};
   const active = Object.keys(days).filter((k) => (days[k].total || 0) >= ACTIVE_DAY_SECONDS);
 
@@ -162,6 +196,53 @@ function achievementMetrics(stats, favorites) {
     if (parseDayKey(key).getDay() === 0) bestWeekendSeconds = Math.max(bestWeekendSeconds, day.total || 0);
   }
 
+  // Weeks run Monday to Sunday.
+  const weekTotals = {};
+  for (const [key, day] of Object.entries(days)) {
+    const week = weekKeyOf(parseDayKey(key));
+    weekTotals[week] = (weekTotals[week] || 0) + (day.total || 0);
+  }
+  const activeWeeks = new Set(active.map((key) => weekKeyOf(parseDayKey(key)))).size;
+
+  let bestDayServices = 0;
+  for (const day of Object.values(days)) {
+    const services = {};
+    for (const slice of Object.values(day.hours || {})) {
+      for (const [source, seconds] of Object.entries(sliceServices(slice))) {
+        services[source] = (services[source] || 0) + seconds;
+      }
+    }
+    bestDayServices = Math.max(bestDayServices,
+      Object.values(services).filter((s) => s >= ACTIVE_DAY_SECONDS).length);
+  }
+
+  // Plays per day come from the history, one row per play, so a day the
+  // retention setting has trimmed away no longer counts.
+  const dayPlays = {};
+  for (const e of history || []) {
+    if (!(e && e.at > 0)) continue;
+    const key = dayKeyOf(new Date(e.at));
+    dayPlays[key] = (dayPlays[key] || 0) + 1;
+  }
+
+  // The day, week and weekend you're in now. On a weekday the weekend is the
+  // coming one, so nothing has been listened to in it yet.
+  const today = startOfToday();
+  const todayKey = dayKeyOf(today);
+  const todayEntry = days[todayKey] || {};
+  const todayServiceSeconds = {};
+  for (const slice of Object.values(todayEntry.hours || {})) {
+    for (const [source, seconds] of Object.entries(sliceServices(slice))) {
+      todayServiceSeconds[source] = (todayServiceSeconds[source] || 0) + seconds;
+    }
+  }
+  const dayTotal = (offset) => {
+    const entry = days[dayKeyOf(new Date(today.getFullYear(), today.getMonth(), today.getDate() + offset))];
+    return (entry && entry.total) || 0;
+  };
+  const weekday = today.getDay();
+  const thisWeekendSeconds = weekday === 6 ? dayTotal(0) : weekday === 0 ? dayTotal(-1) + dayTotal(0) : 0;
+
   const activeRuns = runs(active);
   const habit = Object.keys(days).filter((k) => (days[k].total || 0) >= HABIT_DAY_SECONDS);
 
@@ -176,6 +257,15 @@ function achievementMetrics(stats, favorites) {
     nightOwl,
     earlyBird,
     bestWeekendSeconds,
+    bestWeekSeconds: Object.values(weekTotals).reduce((top, s) => Math.max(top, s), 0),
+    todaySeconds: todayEntry.total || 0,
+    todayPlays: dayPlays[todayKey] || 0,
+    todayServices: Object.values(todayServiceSeconds).filter((s) => s >= ACTIVE_DAY_SECONDS).length,
+    thisWeekSeconds: weekTotals[weekKeyOf(today)] || 0,
+    thisWeekendSeconds,
+    activeWeeks,
+    bestDayServices,
+    pocketSeconds: (stats.sources || {}).ios || 0,
     dawnToDusk,
     hoursCovered: hourTotals.filter((s) => s >= ACTIVE_DAY_SECONDS).length,
     longestStreak: activeRuns.longest,
@@ -185,6 +275,7 @@ function achievementMetrics(stats, favorites) {
     daysSinceFirst: activeRuns.first ? daysBetween(activeRuns.first, startOfToday()) : 0,
     totalPlays: tracks.reduce((sum, t) => sum + (t.plays || 0), 0),
     topTrackPlays: tracks.reduce((top, t) => Math.max(top, t.plays || 0), 0),
+    bestDayPlays: Object.values(dayPlays).reduce((top, n) => Math.max(top, n), 0),
     artistCount: artists.length,
     trackCount: tracks.filter((t) => (t.seconds || 0) >= 1 || (t.plays || 0) > 0).length,
     topArtistSeconds: artists.reduce((top, s) => Math.max(top, s), 0),
@@ -196,12 +287,14 @@ function achievementMetrics(stats, favorites) {
 
 // Each achievement with its current value; `unlocked` maps id -> first time it
 // was earned, so a badge stays earned after Reset brings the numbers back down.
-function evaluateAchievements(stats, favorites, unlocked = {}) {
-  const metrics = achievementMetrics(stats, favorites);
+function evaluateAchievements(stats, favorites, history, unlocked = {}) {
+  const metrics = achievementMetrics(stats, favorites, history);
   return ACHIEVEMENTS.map((a) => {
-    const value = metrics[a.metric] || 0;
-    const unlockedAt = unlocked[a.id] || (value >= a.goal ? Date.now() : 0);
-    return { ...a, value: Math.min(value, a.goal), unlockedAt };
+    const best = metrics[a.metric] || 0;
+    const unlockedAt = unlocked[a.id] || (best >= a.goal ? Date.now() : 0);
+    const current = CURRENT_PERIOD[a.metric];
+    const value = current ? metrics[current.metric] || 0 : best;
+    return { ...a, value: Math.min(value, a.goal), unlockedAt, period: current ? current.period : '' };
   });
 }
 
@@ -249,6 +342,9 @@ function replayUnlockTimes(stats, history, favorites) {
   let total = 0;
   const dayTotals = {};
   const weekendTotals = {};
+  const weekTotals = {};
+  const activeWeeks = new Set();
+  const dayServices = {};
   const dayParts = {};
   const hourTotals = new Array(24).fill(0);
   const sources = {};
@@ -261,6 +357,8 @@ function replayUnlockTimes(stats, history, favorites) {
     // A Sunday adds to its Saturday's weekend.
     const weekend = weekday === 6 ? key
       : weekday === 0 ? dayKeyOf(new Date(date.getFullYear(), date.getMonth(), date.getDate() - 1)) : null;
+    const week = weekKeyOf(date);
+    const services = sliceServices(slice);
     const shares = {};
     let attributed = 0;
     for (const [source, seconds] of Object.entries(slice)) {
@@ -287,11 +385,16 @@ function replayUnlockTimes(stats, history, favorites) {
         reach('longestStreak', active.longest, at);
         reach('activeDays', active.count, at);
         reach('longestGap', active.gap, at);
+        activeWeeks.add(week);
+        reach('activeWeeks', activeWeeks.size, at);
       }
       if (before < HABIT_DAY_SECONDS && today >= HABIT_DAY_SECONDS) {
         extendRun(habit, key);
         reach('longestHabit', habit.longest, at);
       }
+
+      weekTotals[week] = (weekTotals[week] || 0) + step;
+      reach('bestWeekSeconds', weekTotals[week], at);
 
       if (weekend) {
         weekendTotals[weekend] = (weekendTotals[weekend] || 0) + step;
@@ -314,6 +417,11 @@ function replayUnlockTimes(stats, history, favorites) {
       for (const [source, share] of Object.entries(shares)) sources[source] = (sources[source] || 0) + step * share;
       reach('serviceCount', Object.entries(sources)
         .filter(([source, s]) => source !== 'other' && s >= ACTIVE_DAY_SECONDS).length, at);
+      reach('pocketSeconds', sources.ios || 0, at);
+
+      const servicesToday = dayServices[key] || (dayServices[key] = {});
+      for (const [source, seconds] of Object.entries(services)) servicesToday[source] = (servicesToday[source] || 0) + seconds / STEPS;
+      reach('bestDayServices', Object.values(servicesToday).filter((s) => s >= ACTIVE_DAY_SECONDS).length, at);
     }
   }
 
@@ -339,7 +447,11 @@ function replayUnlockTimes(stats, history, favorites) {
   }
   const trackPlays = {};
   const artists = new Set();
+  const dayPlays = {};
   for (const e of plays) {
+    const day = dayKeyOf(new Date(e.at));
+    dayPlays[day] = (dayPlays[day] || 0) + 1;
+    reach('bestDayPlays', dayPlays[day], e.at);
     const key = `${e.source || 'youtube'}:${e.id || e.title}`;
     trackPlays[key] = (trackPlays[key] || 0) + 1;
     reach('topTrackPlays', trackPlays[key], e.at);

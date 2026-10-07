@@ -202,6 +202,15 @@ html.pinned body { margin: 0 auto; }
 }
 .label { color: var(--muted); font-size: 12px; }
 
+/* Daily goal: yesterday + 1 h, the same goal the iOS app sets. */
+.goal { margin: 10px auto 0; max-width: 220px; }
+.goal-track { height: 5px; background: #272235; border-radius: 3px; overflow: hidden; }
+.goal-fill { height: 100%; width: 0; border-radius: 3px; background: var(--accent); transition: width .4s ease; }
+.goal-text { display: flex; justify-content: space-between; margin-top: 5px; font-size: 11px; color: var(--muted); }
+.goal-text b { color: var(--text); font-weight: 600; }
+.goal.reached .goal-fill { background: var(--spotify); }
+.goal.reached #goal-left { color: var(--spotify); font-weight: 600; }
+
 /* A short pop when a figure actually changes value, not on every poll — the
    render loop only adds this class when the new text differs from the old. */
 @keyframes valuePop { 0% { transform: scale(1); } 50% { transform: scale(1.1); } 100% { transform: scale(1); } }
@@ -602,7 +611,7 @@ footer {
 }
 
 .range, .sort { display: flex; gap: 2px; }
-.range-option, .sort-option, .scope-option {
+.range-option, .sort-option, .scope-option, .award-filter {
   background: none;
   border: none;
   border-radius: 5px;
@@ -614,9 +623,9 @@ footer {
   cursor: pointer;
   transition: background .15s ease, color .15s ease;
 }
-.range-option:hover, .sort-option:hover, .scope-option:hover { color: var(--text); }
-.range-option.on, .sort-option.on, .scope-option.on { background: #2b2540; color: var(--accent); }
-.range-option:focus-visible, .sort-option:focus-visible, .scope-option:focus-visible { outline: 1px solid var(--accent); }
+.range-option:hover, .sort-option:hover, .scope-option:hover, .award-filter:hover { color: var(--text); }
+.range-option.on, .sort-option.on, .scope-option.on, .award-filter.on { background: #2b2540; color: var(--accent); }
+.range-option:focus-visible, .sort-option:focus-visible, .scope-option:focus-visible, .award-filter:focus-visible { outline: 1px solid var(--accent); }
 
 /* Columns are scaled against the tallest one, so the shape of the week reads at
    a glance even when the whole week was quiet. */
@@ -927,56 +936,194 @@ footer {
 
 @media (prefers-reduced-motion: reduce) {
   .now-row, .star.pop, .big.pop, .cell span.pop, .overlay:not([hidden]),
-  .overlay:not([hidden]) .dialog, .panel:not([hidden]), .tbtn.press, #refresh.busy svg {
+  .overlay:not([hidden]) .dialog, .panel:not([hidden]), .tbtn.press, #refresh.busy svg,
+  .award-tile.fresh .award-medal, .award-detail {
     animation: none !important;
   }
+  .awards-ring-fill, .award-bar i { transition: none; }
 }
 
-/* Achievements */
-.awards-summary { text-align: center; }
-.awards-count { font-size: 30px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1.1; }
-.awards-count small { font-size: 15px; font-weight: 500; color: var(--muted); margin-left: 2px; }
-.awards-meter {
-  height: 5px;
-  margin: 8px 0 6px;
-  border-radius: 3px;
-  background: #2b2540;
-  overflow: hidden;
+/* Achievements: a ring for the whole collection, the badge closest to being
+   earned beside it, then each group as a grid of medals whose rims fill as
+   they get closer. Tapping a medal opens its details under the grid. */
+.awards-hero { display: flex; align-items: stretch; gap: 12px; }
+.awards-ring { position: relative; flex: 0 0 auto; width: 76px; height: 76px; }
+.awards-ring svg { width: 100%; height: 100%; transform: rotate(-90deg); }
+.awards-ring-track { fill: none; stroke: #2b2540; stroke-width: 6; }
+.awards-ring-fill {
+  fill: none;
+  stroke: url(#awards-ring-grad);
+  stroke-width: 6;
+  stroke-linecap: round;
+  transition: stroke-dasharray .6s ease;
 }
-.awards-meter span {
-  display: block;
-  height: 100%;
-  border-radius: 3px;
-  background: linear-gradient(90deg, var(--accent), #ffc861);
-  transition: width .4s ease;
-}
-
-.awards { list-style: none; display: flex; flex-direction: column; gap: 6px; }
-.award {
+.awards-ring-label {
+  position: absolute;
+  inset: 0;
   display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 7px 9px;
-  border-radius: 8px;
-  background: var(--panel);
-}
-.award-icon {
-  flex: 0 0 auto;
-  width: 30px;
-  height: 30px;
-  display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
+  line-height: 1.05;
+}
+#awards-unlocked { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.awards-ring-label small { font-size: 10px; color: var(--muted); }
+
+.awards-next {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 3px;
+  padding: 8px 10px;
+  border: 1px solid #2b2540;
+  border-radius: 10px;
+  background: var(--panel);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color .15s ease, background .15s ease;
+}
+.awards-next[hidden] { display: none; }
+.awards-next:hover:not(:disabled) { border-color: #4a4363; background: #211d2e; }
+.awards-next:focus-visible { outline: 1px solid var(--accent); }
+.awards-next:disabled { cursor: default; }
+.awards-next small {
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.awards-next-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.awards-next-icon { font-size: 15px; }
+.awards-next-title { font-weight: 600; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.awards-next-progress { font-size: 10px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.awards-next .award-bar { margin-top: 2px; }
+.awards-next.done { border-color: #5a4a2a; }
+.awards-next.done .award-bar i { background: #ffc861; }
+
+.award-bar { display: block; height: 4px; border-radius: 2px; background: #2b2540; overflow: hidden; }
+.award-bar i { display: block; height: 100%; background: var(--accent); border-radius: 2px; transition: width .4s ease; }
+
+.awards-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 14px 0 12px;
+}
+.awards-recent {
+  min-width: 0;
+  font-size: 10px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.award-group + .award-group { margin-top: 14px; }
+.per-percent.complete { color: #ffc861; }
+.award-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; }
+.award-tile {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  padding: 7px 2px 6px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+  transition: background .15s ease, border-color .15s ease;
+}
+.award-tile:hover { background: var(--panel); }
+.award-tile:focus-visible { outline: 1px solid var(--accent); }
+.award-tile.on { background: var(--panel); border-color: #3d3358; }
+
+/* The rim is a conic fill of the badge's progress; earned badges get gold. */
+.award-medal {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  padding: 3px;
   border-radius: 50%;
-  font-size: 16px;
+  background: conic-gradient(var(--accent) calc(var(--p) * 1%), #2b2540 0);
+}
+.award-tile.earned .award-medal { background: conic-gradient(#ffc861, #b191ff, #ffc861); }
+.award-icon {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  font-size: 17px;
+  background: #1f1b2c;
+}
+.award-tile.earned .award-icon { background: radial-gradient(circle at 35% 30%, #4a3a78, #241f36); }
+.award-tile.locked .award-icon { filter: grayscale(1); opacity: .4; }
+.award-new {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 2px var(--bg);
+}
+.award-title {
+  width: 100%;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.2;
+  text-align: center;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  min-height: 2.4em;
+}
+.award-tile.locked .award-title { color: var(--muted); }
+.award-caption { font-size: 9px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.award-tile.earned .award-caption { color: #ffc861; }
+@keyframes awardIn { 0% { box-shadow: 0 0 0 0 rgba(177, 145, 255, .6); } 100% { box-shadow: 0 0 0 9px rgba(177, 145, 255, 0); } }
+.award-tile.fresh .award-medal { animation: awardIn 1.2s ease-out 2; }
+
+@keyframes detailIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+.award-detail {
+  display: flex;
+  gap: 10px;
+  margin-top: 6px;
+  padding: 10px;
+  border-radius: 10px;
+  background: var(--panel);
+  border: 1px solid #3d3358;
+  animation: detailIn .18s ease-out;
+}
+.award-detail.earned { border-color: #5a4a2a; }
+.award-detail-icon {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  font-size: 19px;
   background: #2b2540;
 }
-.award.earned .award-icon { background: radial-gradient(circle at 35% 30%, #4a3a78, #2b2540); box-shadow: 0 0 0 1px #6c58a8; }
-.award.locked .award-icon { filter: grayscale(1); opacity: .45; }
-.award-body { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
-.award-title { font-weight: 600; font-size: 12px; }
-.award.locked .award-title { color: var(--muted); }
-.award-title em {
+.award-detail.earned .award-detail-icon { background: radial-gradient(circle at 35% 30%, #4a3a78, #241f36); box-shadow: 0 0 0 1px #ffc861; }
+.award-detail.locked .award-detail-icon { filter: grayscale(1); opacity: .55; }
+.award-detail-body { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.award-detail-title { font-weight: 600; font-size: 12px; }
+.award-detail-title em {
   font-style: normal;
   font-size: 9px;
   font-weight: 700;
@@ -989,21 +1136,18 @@ footer {
   margin-left: 6px;
   vertical-align: 1px;
 }
-.award-body small { color: var(--muted); font-size: 11px; line-height: 1.3; }
-.award-bar { display: block; height: 3px; margin-top: 4px; border-radius: 2px; background: #2b2540; overflow: hidden; }
-.award-bar i { display: block; height: 100%; background: var(--accent); border-radius: 2px; }
-.award-meta {
-  flex: 0 0 auto;
-  max-width: 82px;
-  text-align: right;
+.award-detail-body small { color: var(--muted); font-size: 11px; line-height: 1.35; }
+.award-detail-status {
+  display: flex;
+  justify-content: space-between;
   font-size: 10px;
   color: var(--muted);
   font-variant-numeric: tabular-nums;
 }
-.award.earned .award-meta { color: #ffc861; }
-@keyframes awardIn { 0% { box-shadow: 0 0 0 0 rgba(177, 145, 255, .6); } 100% { box-shadow: 0 0 0 8px rgba(177, 145, 255, 0); } }
-.award.fresh { animation: awardIn 1.2s ease-out 2; outline: 1px solid #6c58a8; }
-#awards { margin-top: 16px; }
+.award-detail-status b { font-weight: 600; color: var(--text); }
+.award-detail-status.earned { color: #ffc861; }
+
+.awards-empty { padding: 18px 8px; text-align: center; font-size: 11px; color: var(--muted); }
 
 /* Loading skeleton: shown while the first pull from Firestore is in flight. */
 @keyframes skeletonPulse { 0%, 100% { opacity: .45; } 50% { opacity: .9; } }

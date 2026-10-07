@@ -148,10 +148,28 @@ function showAchievementBadge(unseen) {
   if (unseen.length) chrome.action.setBadgeBackgroundColor({ color: '#b191ff' });
 }
 
+// The same chime the iOS app plays. A service worker can't play audio, so it
+// goes through an offscreen page (Chrome closes it again once it falls silent).
+async function playChime() {
+  if (!chrome.offscreen) return;
+  const url = chrome.runtime.getURL('offscreen.html');
+  const open = await chrome.runtime.getContexts({ contextTypes: ['OFFSCREEN_DOCUMENT'], documentUrls: [url] });
+  if (!open.length) {
+    await chrome.offscreen.createDocument({
+      url: 'offscreen.html',
+      reasons: ['AUDIO_PLAYBACK'],
+      justification: 'Plays a chime when an achievement is unlocked or the daily goal is reached.',
+    });
+  }
+  await chrome.runtime.sendMessage({ type: 'offscreen-play-sound', src: 'sounds/achievement.wav' });
+}
+
 // Must run on the queue: it read-modify-writes the stored record.
 async function recordAchievements(stats, favorites, history) {
   const saved = await loadAchievements();
-  const list = evaluateAchievements(stats, favorites, saved.unlocked);
+  const list = evaluateAchievements(stats, favorites, history, saved.unlocked);
+  // Forget unseen badges that have since been retired, so they can't hold up the count.
+  saved.unseen = saved.unseen.filter((id) => ACHIEVEMENTS.some((a) => a.id === id));
   const fresh = list.filter((a) => a.unlockedAt && !saved.unlocked[a.id]);
   // New badges, and once the badges that predate this, are dated from when the
   // listening actually reached them. Only ever moves a date earlier, so a badge
@@ -166,7 +184,10 @@ async function recordAchievements(stats, favorites, history) {
     saved.dated = true;
     saved.unseen = saved.unseen.concat(fresh.map((a) => a.id));
     await chrome.storage.local.set({ achievements: saved });
-    if (fresh.length) showAchievementBadge(saved.unseen);
+    if (fresh.length) {
+      showAchievementBadge(saved.unseen);
+      playChime().catch(() => {});
+    }
   }
   return { list, unseen: saved.unseen };
 }
@@ -175,6 +196,68 @@ async function recordAchievements(stats, favorites, history) {
 async function checkAchievements() {
   const merged = await mergeRemote(await loadStats(), await loadHistory());
   await recordAchievements(merged.stats, await loadFavorites(), merged.history);
+}
+
+// --- Daily goal ----------------------------------------------------------------
+//
+// The goal grows with you: one hour more than you listened yesterday, on every
+// device — the same goal the iOS app sets. Reaching it is announced once a day,
+// with a notification and the achievement chime.
+
+const DAILY_GOAL_BONUS = 60 * 60;
+const GOAL_CHECK_MS = 30 * 1000;
+let lastGoalCheck = 0;
+
+function dailyGoal(days, now = Date.now()) {
+  const yesterday = new Date(now);
+  yesterday.setDate(yesterday.getDate() - 1);
+  const entry = (key) => (days[key] && days[key].total) || 0;
+  return { today: entry(dayKey(now)), goal: entry(dayKey(yesterday.getTime())) + DAILY_GOAL_BONUS };
+}
+
+function goalDuration(seconds) {
+  const s = Math.round(seconds);
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  if (h > 0) return m === 0 ? `${h}h` : `${h}h ${m}m`;
+  return m > 0 ? `${m}m` : `${s}s`;
+}
+
+// Runs on the queue (from recordTick), throttled: ticks arrive every few seconds.
+async function checkDailyGoal() {
+  const now = Date.now();
+  if (now - lastGoalCheck < GOAL_CHECK_MS) return;
+  lastGoalCheck = now;
+
+  const key = dayKey(now);
+  const stored = await chrome.storage.local.get('dailyGoal');
+  if (stored.dailyGoal && stored.dailyGoal.announced === key) return;
+
+  const merged = await mergeRemote(await loadStats(), []);
+  const { today, goal } = dailyGoal(merged.stats.days || {}, now);
+  if (today < goal) return;
+
+  await chrome.storage.local.set({ dailyGoal: { announced: key } });
+  if (chrome.notifications) {
+    chrome.notifications.create(`daily-goal-${key}`, {
+      type: 'basic',
+      iconUrl: 'icons/icon128.png',
+      title: 'Daily goal reached',
+      message: `You've listened ${goalDuration(today)} today — an hour more than yesterday.`,
+      // The chime below is the sound, so the system one doesn't play over it.
+      silent: true,
+    });
+  }
+  playChime().catch(() => {});
+}
+
+// A click on the goal notification opens the popup, where the goal is shown.
+if (chrome.notifications) {
+  chrome.notifications.onClicked.addListener((id) => {
+    if (!id.startsWith('daily-goal-')) return;
+    chrome.notifications.clear(id);
+    if (chrome.action.openPopup) chrome.action.openPopup().catch(() => {});
+  });
 }
 
 async function markAchievementsSeen() {
@@ -258,6 +341,69 @@ function addToDays(stats, source, from, to) {
   }
 }
 
+// Collaborations are often credited in the title rather than the channel —
+// "Irina Rimes x Delia - Petale" on Irina Rimes's channel. Any artist already
+// in the stats who appears in the title's credit part (the side of " - " that
+// names the artist, or after "feat." / "ft." / "(with") is attached:
+// "Irina Rimes, Delia", the same shape Spotify uses for several artists.
+// Longer names win, so a known "Delia Matache" is not also read as "Delia".
+const TITLE_DASH = /\s[-–—]\s/;
+const TITLE_FEATURE = /(?:\bfeat\.?|\bft\.?|\bfeaturing|[([]\s*with)\s+([^)\]]+)/giu;
+
+function escapeRegExp(text) {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function nameMatcher(name, flags = 'iu') {
+  return new RegExp(`(?<![\\p{L}\\p{N}])${escapeRegExp(name)}(?![\\p{L}\\p{N}])`, flags);
+}
+
+function withTitleArtists(artist, title, knownArtists) {
+  const credited = artist ? artist.split(', ') : [];
+  const regions = [];
+  const dash = title.search(TITLE_DASH);
+  if (dash > 0) {
+    // Usually "Artists - Song", but "Song - Artists" exists too: take the side
+    // that names the artist we already have.
+    const head = title.slice(0, dash);
+    const tail = title.slice(dash).replace(TITLE_DASH, '');
+    const namesArtist = (side) => credited.some((c) => nameMatcher(c).test(side));
+    regions.push(!namesArtist(head) && namesArtist(tail) ? tail : head);
+  }
+  for (const match of title.matchAll(TITLE_FEATURE)) regions.push(match[1]);
+  if (!regions.length) return artist;
+
+  const names = new Set();
+  for (const key of knownArtists) {
+    names.add(key.trim());
+    for (const part of key.split(', ')) names.add(part.trim());
+  }
+
+  // Blank out the artists already credited so their names, or pieces of them,
+  // can't match again; then each found name, longest first.
+  let credits = regions.join(' | ');
+  const blank = (name) => {
+    const at = credits.search(nameMatcher(name));
+    if (at >= 0) credits = credits.replace(nameMatcher(name, 'giu'), (m) => ' '.repeat(m.length));
+    return at;
+  };
+  for (const name of credited) blank(name);
+
+  const found = [];
+  const candidates = [...names]
+    .filter((n) => n.length >= 2 && !['unknown artist', '<unknown>', 'unknown'].includes(n.toLowerCase()))
+    .sort((a, b) => b.length - a.length || (a < b ? -1 : 1));
+  for (const name of candidates) {
+    if (credited.some((c) => nameMatcher(name).test(c))) continue;
+    const at = blank(name);
+    if (at >= 0) found.push({ name, at });
+  }
+  if (!found.length) return artist;
+
+  found.sort((a, b) => a.at - b.at);
+  return [...credited, ...found.map((f) => f.name)].join(', ');
+}
+
 async function recordTick(msg) {
   const stats = await loadStats();
   const now = Date.now();
@@ -276,7 +422,8 @@ async function recordTick(msg) {
   stats.total += span;
   stats.sources[source] = (stats.sources[source] || 0) + span;
 
-  const artist = (msg.artist || '').trim();
+  const title = (msg.title || '').trim();
+  const artist = withTitleArtists((msg.artist || '').trim(), title, Object.keys(stats.artists));
   if (artist) {
     const entry = stats.artists[artist] || { seconds: 0, source };
     entry.seconds += span;
@@ -285,7 +432,6 @@ async function recordTick(msg) {
     stats.artists[artist] = entry;
   }
 
-  const title = (msg.title || '').trim();
   if (title) {
     const key = `${source}:${msg.id || title}`;
     const track = stats.tracks[key] || { id: msg.id || '', title, artist, source, seconds: 0, plays: 0 };
@@ -313,6 +459,7 @@ async function recordTick(msg) {
   }
 
   if (msg.newPlay || msg.newHistoryEntry) await checkAchievements();
+  await checkDailyGoal();
 }
 
 
